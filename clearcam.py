@@ -456,9 +456,30 @@ class VideoCapture:
       # Inherit stderr so camera connection failures reach the engine log.
       hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL)
       self.hls_proc[cam_name] = hls_proc
+      if is_rtsp:
+        # Detection decodes its own RTSP session instead of tailing the recorded
+        # playlist. Tailing stalls on recorded-timeline damage (a reconnect once
+        # wrote a 4.5-hour EXTINF that wedged every decoder session), and a direct
+        # feed starts immediately instead of waiting for segments.
+        time.sleep(2)
+        if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
+        command = [
+            ffmpeg_path,
+            "-loglevel", "error",
+            "-rtsp_transport", "tcp",
+            "-i", src,
+            "-an",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",
+            "-fps_mode", "vfr",
+            "-threads", "1",
+            "-"
+        ]
+        return hls_proc, subprocess.Popen(command, stdout=subprocess.PIPE)
       time.sleep(15)
       if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
-      
+
       command = [
           ffmpeg_path,
           "-live_start_index", "-1",
