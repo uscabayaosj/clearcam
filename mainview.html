@@ -2377,6 +2377,7 @@
     const activeVideoStreams = new Map();
     let wasHidden = false;
     let currentStreamDate = new Date().toLocaleDateString('en-CA');
+    let followToday = true; // false only after the owner picks a past date to review
     let currentEventDateFilter = new Date().toLocaleDateString('en-CA');
     
     let zoneEditorState = {
@@ -2449,10 +2450,28 @@
         const selectedDate = this.value;
         if (selectedDate) {
           currentStreamDate = selectedDate;
+          followToday = selectedDate === new Date().toLocaleDateString('en-CA');
           console.log('Date changed to:', currentStreamDate);
           restartAllStreams();
         }
       });
+
+      // Midnight rollover: retention removes the finished day, so a page left
+      // following "today" must move to the new date or its tiles freeze at 00:00.
+      setInterval(async () => {
+        const today = new Date().toLocaleDateString('en-CA');
+        if (!followToday || currentStreamDate === today) return;
+        try {
+          const dates = await (await fetch('/list_days')).json();
+          if (dates && dates.length > 0) {
+            populateDateDropdown(dates, dateSelect, false);
+            populateDateDropdown(dates, eventDateFilter, true);
+          }
+        } catch (_) { /* keep last dropdown contents */ }
+        currentStreamDate = today;
+        restartAllStreams();
+        loadEventImages(false);
+      }, 30000);
       
       // Event date filter dropdown listener
       eventDateFilter.addEventListener('change', function() {
@@ -3709,6 +3728,7 @@
       if (folder !== currentStreamDate) {
         document.getElementById('streamDateSelect').value = folder;
         currentStreamDate = folder;
+        followToday = folder === new Date().toLocaleDateString('en-CA');
         restartAllStreams();
       } else if (activeVideoStreams.get(camName)?.streamUrl?.endsWith('/live.m3u8')) {
         // Seek offsets are meaningless inside the rolling live window; reattach
