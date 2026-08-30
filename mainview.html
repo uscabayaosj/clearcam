@@ -1312,8 +1312,8 @@
     .topbar-actions { display: flex; align-items: center; gap: 10px; }
     .local-status { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--sage-strong); border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; white-space: nowrap; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brass); box-shadow: 0 0 0 4px rgba(231,179,93,.12); }
-    .primary-action, .form-section button:not(#setMaxStorageBtn):not(.icon-button), #searchButton, #loadMoreEventsBtn { border: 0 !important; border-radius: 11px !important; background: var(--paper) !important; color: var(--ink) !important; padding: 11px 15px !important; font-weight: 650; cursor: pointer; box-shadow: none !important; }
-    .primary-action:hover, .form-section button:not(#setMaxStorageBtn):not(.icon-button):hover, #searchButton:hover, #loadMoreEventsBtn:hover { background: var(--sage-strong) !important; }
+    .primary-action, #searchButton, #loadMoreEventsBtn { border: 0 !important; border-radius: 11px !important; background: var(--paper) !important; color: var(--ink) !important; padding: 11px 15px !important; font-weight: 650; cursor: pointer; box-shadow: none !important; }
+    .primary-action:hover, #searchButton:hover, #loadMoreEventsBtn:hover { background: var(--sage-strong) !important; }
     .camera-reel-section { margin-bottom: 42px; }
     .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 0 0 14px; }
     .section-heading h2, .events-section h2, .system-ledger h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; font-weight: 650; }
@@ -1392,8 +1392,38 @@
     .secondary-action:hover { background: var(--ink-soft); }
     .form-section { margin-top: 18px !important; padding: 18px !important; }
     .form-section summary { cursor: pointer; color: var(--ink); font-weight: 650; }
-    .form-section form { margin-top: 16px; }
+    .form-section form { margin-top: 0; }
     .form-section input { border: 1px solid #b4c0ba; border-radius: 9px; padding: 10px; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    /* Buttons sit on the light paper card here: paper-colored chrome vanishes. */
+    #cameraSetup button:not(.icon-button) { background: var(--ink) !important; color: var(--paper) !important; border-radius: 10px !important; padding: 10px 16px !important; font-weight: 650; }
+    #cameraSetup button:not(.icon-button):hover { background: var(--ink-soft) !important; }
+    #cameraSetup button:not(.icon-button):active { transform: scale(.98); }
+    #cameraSetup button:not(.icon-button):focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+    .setup-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--surface-line); }
+    .setup-group:first-of-type { border-top: 0; padding-top: 4px; }
+    .setup-group h4 { margin: 0 0 10px; font-size: .82rem; font-weight: 650; letter-spacing: .02em; color: #52635d; }
+    .setup-group label { font-size: .88rem; color: var(--ink); }
+    .setup-hint { margin: 6px 0 0; color: #52635d; font-size: .8rem; line-height: 1.45; }
+    .storage-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+    .storage-input { display: flex; align-items: center; gap: 8px; }
+    .storage-input input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+    .storage-input span { color: #52635d; font-size: .88rem; }
+    /* Settings rows: label and always-visible caption on the left, control right. */
+    .modal-content .modal-header h3 { color: var(--paper) !important; }
+    .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; }
+    .setting-text { min-width: 0; flex: 1; }
+    .setting-text label { display: block; font-weight: 600; font-size: .9rem; }
+    .setting-text small { display: block; margin-top: 2px; color: var(--paper-muted); font-size: .78rem; line-height: 1.4; }
+    .setting-row select, .setting-row input[type=text], .setting-row input[type=password] { flex: 0 0 auto; }
+    .switch { position: relative; display: inline-block; flex: 0 0 auto; width: 44px; height: 26px; }
+    .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    .switch-knob { position: absolute; inset: 0; border-radius: 999px; background: #46565a; transition: background .2s ease; pointer-events: none; }
+    .switch-knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); transition: transform .22s cubic-bezier(.2,.9,.3,1); }
+    .switch input:checked + .switch-knob { background: var(--sage-strong); }
+    .switch input:checked + .switch-knob::after { transform: translateX(18px); }
+    .switch input:focus-visible + .switch-knob { outline: 2px solid var(--brass); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { .switch-knob, .switch-knob::after { transition: none; } }
     .multi-view-wrapper { display: none !important; }
     #multiView { margin-top: 22px; }
     .modal { background: rgba(5, 9, 10, .78) !important; backdrop-filter: blur(12px); }
@@ -1450,7 +1480,10 @@
     #settingsContainer label { min-width: min(100%, 220px); }
     #settingsContainer input, #settingsContainer select { max-width: 100%; }
     #settingsFeedback { color: var(--danger); }
-    #appFeedback { position: fixed; bottom: 84px; inset-inline: max(20px, calc((100vw - 680px) / 2)); z-index: 1100; padding: 16px 20px; background: var(--paper); color: var(--ink); border-radius: 12px; box-shadow: 0 8px 28px #0005; }
+    #appFeedback { position: fixed; bottom: 84px; inset-inline: max(20px, calc((100vw - 680px) / 2)); z-index: 1100; padding: 14px 18px; background: var(--paper); color: var(--ink); border-radius: 12px; box-shadow: 0 8px 28px #0005; opacity: 0; transform: translateY(10px); transition: opacity .26s cubic-bezier(.2,.9,.3,1), transform .26s cubic-bezier(.2,.9,.3,1); }
+    #appFeedback.toast-showing { opacity: 1; transform: translateY(0); }
+    #appFeedback.toast-leaving { opacity: 0; transform: translateY(10px); }
+    @media (prefers-reduced-motion: reduce) { #appFeedback { transform: none; transition: opacity .2s ease; } #appFeedback.toast-showing, #appFeedback.toast-leaving { transform: none; } }
     #appFeedback[hidden], #searchAvailability[hidden] { display: none; }
     #searchAvailability { color: #33433e; line-height: 1.5; }
     .event-preview { padding: 0; border: 0; background: transparent; cursor: pointer; }
@@ -1621,34 +1654,44 @@
     </div>
     <details class="form-section" id="cameraSetup">
       <summary>Camera &amp; storage setup</summary>
-    <form id="addCameraForm">
-      <label for="cameraNameInput">Camera name</label>
-      <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
-      <label for="cameraSourceInput">Camera stream address</label>
-      <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://…" required autocomplete="off">
-      <button type="submit">Add Camera</button>
-    </form>
-    <div class="analyse-section" style="margin-top: 15px;">
-      <form id="analyseFootageForm">
-        <label for="videoFileInput">Video to analyse</label>
-        <input type="file" id="videoFileInput" accept="video/*" required>
-        <button type="submit" id="analyseBtn">
-          <span class="btn-spinner" style="display:none;"></span>
-          <span class="btn-text">Analyse Footage</span>
-        </button>
-      </form>
-    </div>
-    <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
-      <div class="spinner" style="margin-bottom:6px;"></div>
-      <small id="analyseProgressText">Uploading 0%</small>
-    </div>
-    <div class="max-storage-control" style="display: flex; flex-direction: column; align-items: flex-start; margin-top: 10px;">
-      <label for="maxStorageInput" style="margin-bottom: 4px;">Set Max Storage (GB):</label>
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <input type="number" id="maxStorageInput" min="1" style="width: 120px;">
-        <button type="button" id="setMaxStorageBtn">Set</button>
+      <div class="setup-group">
+        <h4>Add a camera</h4>
+        <form id="addCameraForm">
+          <label for="cameraNameInput">Camera name</label>
+          <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
+          <label for="cameraSourceInput">Stream address</label>
+          <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://user:password@address/stream1" required autocomplete="off">
+          <p class="setup-hint">Include the camera account and password in the address.</p>
+          <button type="submit">Add Camera</button>
+        </form>
       </div>
-    </div>
+      <div class="setup-group">
+        <h4>Storage</h4>
+        <div class="storage-row">
+          <label for="maxStorageInput">Keep recordings up to</label>
+          <div class="storage-input">
+            <input type="number" id="maxStorageInput" min="1" inputmode="numeric">
+            <span aria-hidden="true">GB</span>
+            <button type="button" id="setMaxStorageBtn">Save</button>
+          </div>
+        </div>
+        <p class="setup-hint">Older days are removed first. Today's recording is always kept.</p>
+      </div>
+      <div class="setup-group analyse-section">
+        <h4>Analyse a video file</h4>
+        <form id="analyseFootageForm">
+          <label for="videoFileInput" class="visually-hidden">Video to analyse</label>
+          <input type="file" id="videoFileInput" accept="video/*" required>
+          <button type="submit" id="analyseBtn">
+            <span class="btn-spinner" style="display:none;"></span>
+            <span class="btn-text">Analyse Footage</span>
+          </button>
+        </form>
+        <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
+          <div class="spinner" style="margin-bottom:6px;"></div>
+          <small id="analyseProgressText">Uploading 0%</small>
+        </div>
+      </div>
     </details>
   </aside>
   </div>
@@ -3814,28 +3857,26 @@
       };
 
         const wrapper = document.createElement("div");
-        wrapper.style.display = "flex";
-        wrapper.style.justifyContent = "space-between";
-        wrapper.style.alignItems = "center";
-        wrapper.style.gap = "10px";
+        wrapper.className = "setting-row";
 
+        const text = document.createElement("div");
+        text.className = "setting-text";
         const label = document.createElement("label");
-        const labelContent = (labelMap[key] || key);
-        label.innerHTML = `
-        ${labelContent}
-        <span class="tooltip" style="margin-left: 4px;">
-          <span class="tooltip-icon">?</span>
-          <span class="tooltiptext">${tooltipMap[key] || ''}</span>
-          </span>
-        `;
-        label.style.flex = "1";
+        label.textContent = labelMap[key] || key;
+        text.appendChild(label);
+        if (tooltipMap[key]) {
+          const caption = document.createElement("small");
+          caption.textContent = tooltipMap[key];
+          text.appendChild(caption);
+        }
         let input;
         if (key === "model_size") {
           input = document.createElement("select");
+          const sizeNames = { t: "Tiny", s: "Small", m: "Medium", c: "Compact", e: "Extended" };
           ["t", "s", "m", "c", "e"].forEach(opt => {
             const option = document.createElement("option");
             option.value = opt;
-            option.textContent = opt;
+            option.textContent = sizeNames[opt];
             if (value === opt) option.selected = true;
             input.appendChild(option);
           });
@@ -3885,8 +3926,18 @@
         input.dataset.key = key;
         input.id = `setting-${key}`;
         label.htmlFor = input.id;
-        wrapper.appendChild(label);
-        wrapper.appendChild(input);
+        wrapper.appendChild(text);
+        if (input.type === "checkbox") {
+          const control = document.createElement("span");
+          control.className = "switch";
+          const knob = document.createElement("span");
+          knob.className = "switch-knob";
+          knob.setAttribute("aria-hidden", "true");
+          control.append(input, knob);
+          wrapper.appendChild(control);
+        } else {
+          wrapper.appendChild(input);
+        }
         container.appendChild(wrapper);
       });
     }
@@ -4020,11 +4071,24 @@
       return card;
     }
 
+    let announceHideTimer = null;
     function announce(message, error = false) {
       const target = document.getElementById('appFeedback');
+      clearTimeout(announceHideTimer);
       target.hidden = false;
       target.setAttribute('role', error ? 'alert' : 'status');
       target.textContent = message;
+      target.classList.remove('toast-leaving');
+      requestAnimationFrame(() => target.classList.add('toast-showing'));
+      // Feedback confirms, then gets out of the way; errors linger a bit longer.
+      announceHideTimer = setTimeout(() => {
+        target.classList.remove('toast-showing');
+        target.classList.add('toast-leaving');
+        announceHideTimer = setTimeout(() => {
+          target.hidden = true;
+          target.classList.remove('toast-leaving');
+        }, 260);
+      }, error ? 6000 : 3200);
     }
 
     function openJournalSearch() {
