@@ -11,6 +11,7 @@ final class EngineController: ObservableObject {
     @Published private(set) var failure: String?
     @Published private(set) var starting = false
     @Published private(set) var notificationsEnabled = false
+    @Published private(set) var notificationsPausedUntil: Date?
 
     let support: URL
     private var process: Process?
@@ -160,6 +161,25 @@ final class EngineController: ObservableObject {
     }
 
     func retry() async { restartAttempts = 0; await stop(); await start() }
+
+    /// After system wake, camera connections are dead; verify the engine is
+    /// reachable and restart it if not, rather than waiting out slow recovery.
+    func recoverAfterWake() async {
+        restartAttempts = 0
+        guard let active = session else { await start(); return }
+        try? await Task.sleep(for: .seconds(5))  // let the network come back first
+        if let (_, response) = try? await network.data(for: active.request("engine_status")),
+           (response as? HTTPURLResponse)?.statusCode == 200 { return }
+        status = "Restarting after sleep"
+        await stop()
+        await start()
+    }
+
+    func pauseNotifications(minutes: Int) async {
+        guard let active = session else { return }
+        _ = try? await network.data(for: active.request("pause_notifications?minutes=\(minutes)"))
+        notificationsPausedUntil = minutes > 0 ? Date().addingTimeInterval(TimeInterval(minutes) * 60) : nil
+    }
     func revealData() { NSWorkspace.shared.open(support.appendingPathComponent("Data")) }
     func revealLog() { NSWorkspace.shared.open(support.appendingPathComponent("engine.log")) }
     func enableNotifications() async {

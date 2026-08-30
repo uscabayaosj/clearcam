@@ -28,6 +28,22 @@ def run(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
 
 
+def signing_identity():
+    """A stable local identity keeps TCC grants (Local Network) across rebuilds.
+
+    Prefers the self-signed 'ClearCam Local Signing' certificate when the user
+    has trusted it; otherwise falls back to ad-hoc signing, which macOS treats
+    as a new app on every rebuild. CLEARCAM_SIGN_IDENTITY overrides.
+    """
+    if override := os.environ.get('CLEARCAM_SIGN_IDENTITY'):
+        return override
+    try:
+        identities = run('/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning')
+    except subprocess.CalledProcessError:
+        return '-'
+    return 'ClearCam Local Signing' if 'ClearCam Local Signing' in identities else '-'
+
+
 def copy_tree(source, destination):
     shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store'))
@@ -73,14 +89,18 @@ def relocate_libraries(resources):
             run('/usr/bin/install_name_tool', *changes, str(binary))
         if binary.suffix == '.dylib':
             run('/usr/bin/install_name_tool', '-id', '@rpath/' + binary.name, str(binary))
-        run('/usr/bin/codesign', '--force', '--sign', '-', str(binary))
+        run('/usr/bin/codesign', '--force', '--sign', SIGN_IDENTITY, str(binary))
     return sorted(p.name for p in visited)
+
+
+SIGN_IDENTITY = signing_identity()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
     args = parser.parse_args()
+    print('Signing identity:', 'ad-hoc (permissions reset each rebuild)' if SIGN_IDENTITY == '-' else SIGN_IDENTITY)
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
     # Stage outside dist: iCloud's fileproviderd re-stamps Finder metadata on
@@ -151,7 +171,7 @@ def main():
     for attempt in range(5):
         try:
             strip_finder_metadata()
-            run('/usr/bin/codesign', '--force', '--deep', '--sign', '-', str(app))
+            run('/usr/bin/codesign', '--force', '--deep', '--sign', SIGN_IDENTITY, str(app))
             strip_finder_metadata()
             run('/usr/bin/codesign', '--verify', '--deep', '--strict', str(app))
             break

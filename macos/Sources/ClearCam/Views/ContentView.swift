@@ -43,6 +43,15 @@ struct HubMenu: View {
         Text(engine.session == nil ? "Engine unavailable" : "Local engine running")
         Button("Open ClearCam") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
         Button("Show Recordings") { engine.revealData() }
+        if let until = engine.notificationsPausedUntil, until > Date() {
+            Button("Resume notifications (paused until \(until.formatted(date: .omitted, time: .shortened)))") {
+                Task { await engine.pauseNotifications(minutes: 0) }
+            }
+        } else {
+            Button("Pause notifications for 1 hour") {
+                Task { await engine.pauseNotifications(minutes: 60) }
+            }
+        }
         SettingsLink { Text("Settings…") }
         Divider()
         Text("Closing the window keeps recording")

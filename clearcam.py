@@ -70,6 +70,11 @@ from ocsort_tracker import ocsort
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
 local_descriptions = LocalDescriptions()
 household_store = household.HouseholdStore(BASE_DIR)
+notifications_muted_until = 0.0  # wall clock; 0 means notifications are on
+
+
+def notifications_muted():
+  return time.time() < notifications_muted_until
 
 
 def _face_regions(frame):
@@ -639,7 +644,7 @@ class VideoCapture:
                     threading.Thread(target=send_notif, args=(global_settings.userID,title,None), daemon=True).start()
                     if global_settings.key:
                       threading.Thread(target=export_and_upload, kwargs={"cam_name": cam_name, "thumbnail": self.filename[cam_name], "userID": global_settings.userID, "key": global_settings.key, "start": ts, "wait":True}, daemon=True).start()
-                  elif not self.vod[cam_name] and alert.is_notif:
+                  elif not self.vod[cam_name] and alert.is_notif and not notifications_muted():
                     title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
                     threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
                   if not self.vod[cam_name] and global_settings.use_qwen:
@@ -885,6 +890,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         return BASE_DIR / "cameras"
     
     def do_GET(self):
+        global notifications_muted_until
         parsed_path = urlparse(self.path)
         parsed_path = parsed_path._replace(path=unquote(parsed_path.path))
         query = parse_qs(parsed_path.query)
@@ -959,7 +965,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             elif not state["active_rules"]: state["state"] = "no_active_rules"
             elif not state["last_inference"] or now - state["last_inference"] > 30: state["state"] = "inference_pending"
             states[name] = state
-          self.send_200({"cameras": states})
+          self.send_200({"cameras": states, "notifications_muted_until": notifications_muted_until or None})
           return
 
         if parsed_path.path == "/vendor/hls.min.js":
@@ -1126,6 +1132,17 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                     "threshold": alert.threshold,
                 })
             self.send_200(alert_info)
+            return
+
+        if parsed_path.path == '/pause_notifications':
+            try:
+                minutes = float(query.get('minutes', ['60'])[0])
+                if not (0 <= minutes <= 24 * 60): raise ValueError()
+            except ValueError:
+                self.send_error(400, 'minutes must be 0-1440')
+                return
+            notifications_muted_until = time.time() + minutes * 60 if minutes else 0.0
+            self.send_200({'muted_until': notifications_muted_until or None})
             return
 
         if parsed_path.path == '/household':
