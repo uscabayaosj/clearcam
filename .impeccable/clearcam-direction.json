@@ -1,0 +1,72 @@
+{
+  "title": "Choose ClearCam’s operating world",
+  "question": "ClearCam is a private camera hub on one person’s Mac. Choose the visual world for its local command surface.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "The household observatory",
+      "kicker": "RECOMMENDED DIRECTION",
+      "lineage": "a quiet home observatory and a well-kept field notebook",
+      "thesis": "The home is being calmly observed, not theatrically surveilled.",
+      "palette": ["#101A1C", "#D9E2DF", "#8AA6A0", "#E7B35D"],
+      "materials": ["deep ink", "soft mineral paper", "brushed brass status marks"],
+      "viewport": "A single generous live view anchors the left; today’s observed moments form a precise timeline to the right; one calm action opens camera setup.",
+      "risk": "Requires restrained detail so it stays useful rather than becoming atmospheric.",
+      "sketch": ".impeccable/sketches/clearcam-observatory.webp"
+    },
+    {
+      "id": "challenger-signal-bench",
+      "label": "Signal bench",
+      "lineage": "a CRT oscilloscope and test bench",
+      "thesis": "Every camera becomes a signal that can be armed, inspected, and made reliable.",
+      "palette": ["#101211", "#A8FFBB", "#D2A55B", "#66706B"],
+      "materials": ["phosphor", "etched graticule", "instrument bezels"],
+      "viewport": "Live video shares a measured graticule with health traces and a small set of detented control actions.",
+      "risk": "Strong for reliability, but risks making home monitoring feel like lab equipment.",
+      "case": "Strong audience identification for a technical owner, but weaker product clarity for reviewing real-world events.",
+      "sketch": ".impeccable/sketches/clearcam-signal-bench.webp",
+      "hero": "https://impeccable.style/worlds/cards/scientific-notation-oscilloscope-signal-bench-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/scientific-notation-oscilloscope-signal-bench.webp"
+    },
+    {
+      "id": "challenger-graphite-console",
+      "label": "Graphite instrument desk",
+      "lineage": "a dark-first professional control surface",
+      "thesis": "Camera state is clear at a glance, with every risky control deliberately separated.",
+      "palette": ["#151817", "#242A27", "#E5ECE7", "#68B89C"],
+      "materials": ["graphite", "hairline seams", "syntax-derived state color"],
+      "viewport": "A persistent tiled workspace foregrounds camera health, with event review and controls in stable panels.",
+      "risk": "Very usable, but less memorable and more likely to resemble a generic technical dashboard.",
+      "case": "Excellent clarity, but loses on audience identification because it treats a private home like enterprise infrastructure.",
+      "sketch": ".impeccable/sketches/clearcam-graphite-desk.png",
+      "hero": "https://impeccable.style/worlds/cards/digital-design-canon-dark-first-developer-console-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/digital-design-canon-dark-first-developer-console.webp"
+    },
+    {
+      "id": "challenger-ascii-scene",
+      "label": "Living glyph scene",
+      "lineage": "a live scene rendered in text characters",
+      "thesis": "The camera feed becomes a tactile, low-bandwidth field of moving light.",
+      "palette": ["#0C120E", "#A4FFAD", "#426A4A", "#E1E9DD"],
+      "materials": ["phosphor glyphs", "character-grid luminance", "single-ink readouts"],
+      "viewport": "A live character-field introduces the feed, with practical event controls held in a clear lower rail.",
+      "risk": "Memorable, but fuses poorly with trustworthy event review and accessible imagery.",
+      "case": "It wins novelty but loses both product clarity and practical use, so it is not recommended.",
+      "sketch": ".impeccable/sketches/clearcam-glyph-scene.png",
+      "hero": "https://impeccable.style/worlds/cards/medium-native-ascii-live-scene-render-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/medium-native-ascii-live-scene-render.webp"
+    }
+  ],
+  "reroll": true,
+  "steer": true,
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A familiar camera dashboard, executed cleanly and without a distinctive operating world.",
+    "palette": ["#F6F7F8", "#FFFFFF", "#1B2430", "#2563EB"],
+    "materials": ["neutral panels", "conventional cards", "blue actions"],
+    "viewport": "A standard header, grid of camera cards, and events table below.",
+    "risk": "Fast to recognize but forgettable, and it does not express ClearCam’s privacy-first point of view.",
+    "sketch": ".impeccable/sketches/clearcam-canon.webp"
+  }
+}

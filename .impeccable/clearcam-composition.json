@@ -1,0 +1,43 @@
+{
+  "title": "Choose the ClearCam layout",
+  "question": "All three retain the approved household-observatory world. Pick the structure that should guide the redesigned local Mac dashboard, or tell me what to combine.",
+  "options": [
+    {
+      "id": "comp-a",
+      "label": "Live view + tonight’s log",
+      "kicker": "FOCUS",
+      "lineage": "one observation window and a concise notebook margin",
+      "thesis": "The active camera is the present; the side log explains what mattered.",
+      "palette": ["#101A1C", "#D9E2DF", "#8AA6A0", "#E7B35D"],
+      "materials": ["deep ink", "mineral-paper panels", "brass status mark"],
+      "viewport": "A dominant live view takes the left; tonight’s event log and camera setup action sit in a narrow right rail.",
+      "risk": "The timeline needs a strong empty state when there are no events.",
+      "hero": ".impeccable/mocks/clearcam-observatory-a.png"
+    },
+    {
+      "id": "comp-b",
+      "label": "Camera reel + daily journal",
+      "kicker": "OVERVIEW",
+      "lineage": "a contact strip above a carefully ordered daybook",
+      "thesis": "Choose a camera in seconds, then read the day as one coherent record.",
+      "palette": ["#101A1C", "#D9E2DF", "#8AA6A0", "#E7B35D"],
+      "materials": ["deep ink", "mineral-paper panels", "brass status mark"],
+      "viewport": "A horizontal camera reel opens the app; the lower surface balances a chronological event journal with a health ledger.",
+      "risk": "A busy multi-camera home could make the top reel feel visually dense.",
+      "hero": ".impeccable/mocks/clearcam-observatory-b.png"
+    },
+    {
+      "id": "comp-c",
+      "label": "Observations timeline",
+      "kicker": "REVIEW",
+      "lineage": "a day’s field observations arranged along a single clear track",
+      "thesis": "The event record is the product; cameras and health are supporting instruments.",
+      "palette": ["#101A1C", "#D9E2DF", "#8AA6A0", "#E7B35D"],
+      "materials": ["deep ink", "mineral-paper panels", "brass status mark"],
+      "viewport": "A camera selector stays left, a rich vertical event timeline fills the center, and a narrow inspector shows the current system state.",
+      "risk": "It makes the live camera less immediate for owners who mainly want to check right now.",
+      "hero": ".impeccable/mocks/clearcam-observatory-c.png"
+    }
+  ],
+  "steer": true
+}

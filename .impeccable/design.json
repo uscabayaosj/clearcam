@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-30T12:34:01.234Z",
+  "title": "Design System: ClearCam",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "neutral",
+        "displayName": "ink",
+        "canonical": "#101a1c",
+        "tonalRamp": [
+          "#050808",
+          "#080e0f",
+          "#0c1315",
+          "#0f191b",
+          "#3b4345",
+          "#707677",
+          "#a9adad",
+          "#e7e8e8"
+        ]
+      },
+      "ink-raised": {
+        "role": "neutral",
+        "displayName": "ink raised",
+        "canonical": "#172527",
+        "tonalRamp": [
+          "#070b0c",
+          "#0c1314",
+          "#111b1d",
+          "#162425",
+          "#414c4e",
+          "#747c7d",
+          "#abb1b1",
+          "#e8e9e9"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "ink soft",
+        "canonical": "#203235",
+        "tonalRamp": [
+          "#0a0f10",
+          "#111a1c",
+          "#182527",
+          "#1f3033",
+          "#485759",
+          "#798486",
+          "#afb5b6",
+          "#e9eaeb"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "paper",
+        "canonical": "#e8eeeb",
+        "tonalRamp": [
+          "#464747",
+          "#797c7a",
+          "#acb0ae",
+          "#dfe4e2",
+          "#ecf1ef",
+          "#f1f5f3",
+          "#f7f9f8",
+          "#fdfdfd"
+        ]
+      },
+      "paper-muted": {
+        "role": "neutral",
+        "displayName": "paper muted",
+        "canonical": "#c4d0ca",
+        "tonalRamp": [
+          "#3b3e3d",
+          "#666c69",
+          "#919a95",
+          "#bcc8c2",
+          "#cfd8d4",
+          "#dce3df",
+          "#eaeeec",
+          "#f9fafa"
+        ]
+      },
+      "sage": {
+        "role": "primary",
+        "displayName": "sage",
+        "canonical": "#99b7a8",
+        "tonalRamp": [
+          "#2e3732",
+          "#505f57",
+          "#71877c",
+          "#93b0a1",
+          "#abc4b8",
+          "#c2d4cb",
+          "#dae5e0",
+          "#f5f8f6"
+        ]
+      },
+      "sage-strong": {
+        "role": "primary",
+        "displayName": "sage strong",
+        "canonical": "#c2decf",
+        "tonalRamp": [
+          "#3a433e",
+          "#65736c",
+          "#90a499",
+          "#bad5c7",
+          "#cde4d8",
+          "#daebe2",
+          "#e9f3ee",
+          "#f9fcfa"
+        ]
+      },
+      "brass": {
+        "role": "neutral",
+        "displayName": "brass",
+        "canonical": "#e7b35d",
+        "tonalRamp": [
+          "#45361c",
+          "#785d30",
+          "#ab8445",
+          "#deac59",
+          "#ebc17a",
+          "#f1d19e",
+          "#f6e4c5",
+          "#fdf7ef"
+        ]
+      },
+      "danger": {
+        "role": "neutral",
+        "displayName": "danger",
+        "canonical": "#e58a84",
+        "tonalRamp": [
+          "#452928",
+          "#774845",
+          "#a96662",
+          "#dc847f",
+          "#ea9f9a",
+          "#efb9b5",
+          "#f6d5d3",
+          "#fcf3f3"
+        ]
+      }
+    },
+    "shadows": [
+      {
+        "name": "deep",
+        "value": "0 20px 48px rgba(0,0,0,0.28)",
+        "purpose": "Selected feed and modal elevation."
+      }
+    ],
+    "motion": [
+      {
+        "name": "camera-edge",
+        "value": "transform .28s cubic-bezier(.22,1,.36,1), border-color .2s ease",
+        "purpose": "Camera interaction; disabled with reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "dock",
+        "value": "980px"
+      },
+      {
+        "name": "stack",
+        "value": "650px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Add-camera and primary actions.",
+      "html": "<button class=\"ds-primary\">Add camera</button>",
+      "css": ".ds-primary { background:#e8eeeb;color:#101a1c;padding:11px 15px;border:0;border-radius:11px;font-weight:650;min-height:44px;cursor:pointer; }.ds-primary:hover { background:#c2decf; }.ds-primary:focus-visible { outline: 3px solid #e7b35d; outline-offset: 3px; }"
+    },
+    {
+      "name": "Camera Action",
+      "kind": "button",
+      "refersTo": "camera-action",
+      "description": "Quiet local camera controls.",
+      "html": "<button class=\"ds-action\" aria-label=\"Play\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\"><path d=\"m8 5 11 7-11 7z\"/></svg></button>",
+      "css": ".ds-action { display:grid;place-items:center;width:44px;height:44px;border:0;border-radius:9px;background:#203235;color:#e8eeeb;cursor:pointer; }.ds-action:hover { color:#c2decf; }.ds-action:focus-visible { outline: 3px solid #e7b35d; outline-offset: 3px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "description": "Persistently labeled setup input.",
+      "html": "<label for=\"ds-name\">Camera name</label><input class=\"ds-input\" id=\"ds-name\" placeholder=\"Living room\">",
+      "css": ".ds-input { display:block;min-height:44px;padding:10px;border:1px solid #b4c0ba;border-radius:9px;background:#f8fbf9;color:#101a1c;font:inherit; }.ds-input:focus-visible { outline: 3px solid #e7b35d; outline-offset: 3px; }"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "description": "Selected rail control.",
+      "html": "<nav aria-label=\"ClearCam\"><button class=\"ds-nav\" aria-current=\"page\">Overview</button></nav>",
+      "css": ".ds-nav { padding:12px;min-height:44px;border:0;border-radius:13px;background:#e8eeeb;color:#101a1c;cursor:pointer; }.ds-nav:hover { background:#c2decf; }.ds-nav:focus-visible { outline: 3px solid #e7b35d; outline-offset: 3px; }"
+    },
+    {
+      "name": "Engine Status",
+      "kind": "chip",
+      "description": "Read-only status backed by the engine.",
+      "html": "<span class=\"ds-status\" role=\"status\">Checking engine…</span>",
+      "css": ".ds-status { display:inline-flex;padding:9px 12px;border:1px solid rgba(232,238,235,.14);border-radius:999px;color:#c2decf;background:#101a1c;font-size:.82rem; }"
+    },
+    {
+      "name": "Journal Surface",
+      "kind": "card",
+      "description": "Mineral-paper working surface.",
+      "html": "<section class=\"ds-journal\"><h2>Daily journal</h2><p>Recent detections from your own cameras.</p></section>",
+      "css": ".ds-journal { padding:30px;border-radius:15px;background:#e8eeeb;color:#101a1c; }.ds-journal h2 { margin:0;font-size:1.5rem; }.ds-journal p { color:#52635d; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Household observatory",
+    "overview": "A private, local record of what the home has noticed. The interface is calm, capable and plain-spoken. Real camera footage carries the visual weight; controls help the owner watch, review and configure without turning the home into an enterprise surveillance dashboard.",
+    "keyCharacteristics": [
+      "Video leads; the journal supports review.",
+      "Ink surroundings and mineral-paper working surfaces.",
+      "Restrained sage interactions and explicit operating-state language.",
+      "Native-feeling system typography, generous hit areas and quiet SVG icons."
+    ],
+    "rules": [
+      {
+        "name": "The Semantic Pair Rule.",
+        "body": "An icon's foreground and background form one component state. Never combine the coral delete icon with the old saturated red button background. The corrected default pair measures approximately 5:1 contrast.",
+        "section": "Colors"
+      },
+      {
+        "name": "The Readable Form Rule.",
+        "body": "Modal and mobile filter text stays at 16px. Adapt the layout rather than shrinking the complete dialog.",
+        "section": "Typography"
+      },
+      {
+        "name": "The State Before Decoration Rule.",
+        "body": "Health comes from the engine endpoint, not a decorative green dot. A live connection failure cannot be represented as successful monitoring just because old footage still plays.",
+        "section": "Elevation & Depth"
+      },
+      {
+        "name": "The Honest Waiting Rule.",
+        "body": "“Waiting for an event” does not claim that an AI description has been generated. Recording, detection, event persistence and description generation are distinct steps.",
+        "section": "Components"
+      }
+    ],
+    "dos": [
+      "**Do** retain the approved local-first product language and real camera imagery.",
+      "**Do** keep all three camera actions aligned with at least 44px hit areas.",
+      "**Do** preserve edits and explain recovery when a request fails.",
+      "**Do** show actual engine state and label generated descriptions.",
+      "**Do** use reduced-motion alternatives without changing the final state."
+    ],
+    "donts": [
+      "**Don't** replace the household observatory with a new visual identity during polish.",
+      "**Don't** hide core controls to make a narrow layout fit.",
+      "**Don't** represent stale playback as a healthy live camera connection.",
+      "**Don't** interpolate camera names into HTML or inline JavaScript.",
+      "**Don't** claim completed native macOS packaging or a verified notification delivery path from these web-surface checks."
+    ]
+  }
+}

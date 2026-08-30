@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
 
@@ -959,7 +960,6 @@
       }
 
       #alertsModal .modal-content {
-        zoom: 0.85 !important;
         transform-origin: top center !important;
         width: 100vw !important;
         max-width: 100vw !important;
@@ -1095,13 +1095,8 @@
       
       .event-image-item {
         width: 100% !important;
-        max-width: 400px !important;
       }
-      
-      .event-image-item img {
-        height: 180px !important;
-      }
-      
+
       .events-filter {
         flex-direction: column !important;
         align-items: flex-start !important;
@@ -1226,7 +1221,6 @@
     @media (max-width: 480px) {
 
       #alertsModal .modal-content {
-        zoom: 0.7 !important;
         padding: 5px !important;
       }
       
@@ -1239,19 +1233,6 @@
         padding: 3px 4px !important;
       }
 
-      .event-image-item img {
-        height: 150px !important;
-      }
-      
-      .event-image-info {
-        font-size: 11px !important;
-      }
-      
-      .event-image-actions button {
-        padding: 8px 6px !important;
-        font-size: 12px !important;
-      }
-      
       .modal-header h3 {
         font-size: 1.1rem !important;
       }
@@ -1281,50 +1262,280 @@
       }
     }
 
+    /* ClearCam household observatory — local control surface */
+    :root {
+      --ink: #101a1c;
+      --ink-raised: #172527;
+      --ink-soft: #203235;
+      --paper: #e8eeeb;
+      --paper-muted: #c4d0ca;
+      --sage: #99b7a8;
+      --sage-strong: #c2decf;
+      --brass: #e7b35d;
+      --danger: #e58a84;
+      --line: rgba(232, 238, 235, 0.14);
+      --surface-line: rgba(16, 26, 28, 0.14);
+      --shadow-deep: 0 20px 48px rgba(0, 0, 0, 0.28);
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--ink); }
+    body {
+      min-width: 320px;
+      margin: 0;
+      background: var(--ink);
+      color: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      letter-spacing: -0.012em;
+    }
+    button, input, select { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--brass);
+      outline-offset: 3px;
+    }
+    .app-frame { min-height: 100vh; display: grid; grid-template-columns: 76px minmax(0, 1fr); }
+    .app-rail {
+      position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; align-items: center;
+      gap: 12px; padding: 20px 12px; background: #0b1213; border-right: 1px solid var(--line); z-index: 20;
+    }
+    .brand-mark { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; overflow: hidden; margin-bottom: 22px; background: var(--paper); color: var(--ink); }
+    .brand-mark svg { width: 25px; height: 25px; }
+    .rail-button, .icon-button { display: inline-grid; place-items: center; width: 42px; height: 42px; border: 1px solid transparent; border-radius: 13px; background: transparent; color: var(--paper-muted); cursor: pointer; transition: background .2s ease, color .2s ease, border-color .2s ease; }
+    .rail-button:hover, .icon-button:hover { background: var(--ink-soft); color: var(--paper); }
+    .rail-button.active { background: var(--paper); color: var(--ink); }
+    .rail-button svg, .icon-button svg { width: 20px; height: 20px; }
+    .rail-spacer { flex: 1; }
+    .app-content { width: min(1320px, 100%); min-width: 0; margin: 0 auto; padding: 32px clamp(20px, 3vw, 48px) 56px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
+    .topbar h1 { margin: 0; font-size: clamp(1.8rem, 2.7vw, 2.7rem); line-height: 1.1; letter-spacing: -0.03em; font-weight: 650; }
+    .topbar p { margin: 8px 0 0; color: var(--paper-muted); font-size: .95rem; }
+    .topbar-actions { display: flex; align-items: center; gap: 10px; }
+    .local-status { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--sage-strong); border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; white-space: nowrap; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brass); box-shadow: 0 0 0 4px rgba(231,179,93,.12); }
+    .primary-action, .form-section button:not(#setMaxStorageBtn):not(.icon-button), #searchButton, #loadMoreEventsBtn { border: 0 !important; border-radius: 11px !important; background: var(--paper) !important; color: var(--ink) !important; padding: 11px 15px !important; font-weight: 650; cursor: pointer; box-shadow: none !important; }
+    .primary-action:hover, .form-section button:not(#setMaxStorageBtn):not(.icon-button):hover, #searchButton:hover, #loadMoreEventsBtn:hover { background: var(--sage-strong) !important; }
+    .camera-reel-section { margin-bottom: 42px; }
+    .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 0 0 14px; }
+    .section-heading h2, .events-section h2, .system-ledger h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; font-weight: 650; }
+    .section-heading p { margin: 0; color: var(--paper-muted); font-size: .88rem; }
+    .camera-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px; padding: 2px 2px 14px; }
+    .camera-empty { flex: 1 0 100%; width: 100%; min-width: 0; max-width: 100%; min-height: 230px; display: grid; place-items: center; padding: 34px; border: 1px dashed rgba(232,238,235,.24); border-radius: 15px; color: var(--paper-muted); text-align: center; overflow: hidden; }
+    .camera-empty > div { max-width: 31ch; overflow-wrap: anywhere; }
+    .camera-empty strong { display: block; color: var(--paper); font-size: 1rem; margin-bottom: 7px; }
+    .camera-error span { display: block; }
+    .retry-camera { margin-top: 15px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--paper); padding: 8px 11px; font-weight: 650; cursor: pointer; }
+    .retry-camera:hover { background: var(--ink-soft); }
+    .camera-card { width: auto; min-width: 0; overflow: hidden; border: 1px solid var(--line) !important; border-radius: 15px !important; background: var(--ink-raised) !important; box-shadow: none !important; transition: transform .28s cubic-bezier(.22,1,.36,1), border-color .2s ease; }
+    .camera-card.selected { border-color: rgba(153,183,168,.5) !important; box-shadow: var(--shadow-deep) !important; }
+    .camera-card:hover { transform: translateY(-3px); }
+    .video-container { aspect-ratio: 16 / 9; background: #070b0c; }
+    .camera-card video { width: 100%; height: 100%; object-fit: cover; }
+    .camera-info { display: flex !important; align-items: center !important; justify-content: space-between; gap: 8px; padding: 12px 13px !important; background: transparent !important; }
+    .camera-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--paper) !important; font-size: .92rem !important; font-weight: 600; }
+    .camera-actions { display: flex; align-items: center; flex: 0 0 auto; height: 44px; }
+    .camera-card .button-group { display: grid !important; grid-template-columns: repeat(3, 44px); grid-auto-rows: 44px; align-items: stretch; gap: 6px !important; }
+    .camera-card .icon-button { box-sizing: border-box !important; width: 44px !important; height: 44px !important; min-width: 44px !important; margin: 0 !important; padding: 0 !important; border-radius: 9px !important; line-height: 1 !important; place-self: stretch; background: var(--ink-soft); color: var(--paper); }
+    .camera-card .icon-button .icon { display: grid; place-items: center; width: 100%; height: 100%; }
+    .camera-card .delete-button { color: var(--danger) !important; background: var(--ink-soft) !important; }
+    .camera-card .delete-button:hover { background: #472729 !important; }
+    .observatory-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); gap: 22px; align-items: start; }
+    .events-section, .form-section { border: 1px solid var(--surface-line) !important; border-radius: 15px !important; background: var(--paper) !important; color: var(--ink) !important; box-shadow: 0 12px 28px rgba(0,0,0,.16) !important; }
+    .events-section { padding: clamp(18px, 2.4vw, 30px) !important; }
+    .journal-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .journal-heading h2 { font-size: clamp(1.35rem, 2vw, 1.8rem); }
+    .journal-heading p { margin: 0; color: #52635d; font-size: .9rem; }
+    .retry-journal { margin-top: 12px; border: 1px solid #9eafa7; border-radius: 9px; background: transparent; color: #30403a; padding: 8px 10px; font-weight: 600; cursor: pointer; }
+    .retry-journal:hover { background: #dbe5df; }
+    .events-filter { gap: 9px !important; margin-bottom: 20px !important; padding-bottom: 18px; border-bottom: 1px solid var(--surface-line); }
+    .events-filter label { color: #33433e !important; font-size: .82rem; font-weight: 650 !important; }
+    .events-filter select, .events-filter input, #imageSearchInput { border: 1px solid #b4c0ba !important; border-radius: 9px !important; background: #f8fbf9 !important; color: var(--ink) !important; padding: 9px 10px !important; }
+    .events-filter > div[style] { margin-left: 0 !important; }
+    #clearButton { border: 1px solid #aebbb4 !important; border-radius: 9px !important; background: transparent !important; color: #30403a !important; padding: 9px 11px !important; cursor: pointer; }
+    /* Journal event rows: one authoritative layer. Thumbnails keep the camera's
+       16:9 frame; the description gets a real reading measure. */
+    #eventImagesContainer { display: grid !important; grid-template-columns: 1fr; gap: 12px; width: auto !important; }
+    .event-image-item { display: grid !important; grid-template-columns: 148px minmax(0, 1fr) auto; align-items: start; gap: 4px 14px; width: auto; padding: 10px !important; border: 1px solid #cad4ce !important; border-radius: 12px !important; background: #f8fbf9 !important; box-shadow: none; }
+    .event-image-item:hover { transform: none; border-color: #9eafa7 !important; }
+    .event-image-item .event-preview { display: block; border-radius: 8px; }
+    .event-image-item img { display: block; width: 148px !important; aspect-ratio: 16 / 9; height: auto !important; object-fit: cover !important; border-radius: 8px !important; background: #dbe5df; }
+    .event-image-info { color: #31413b !important; font-size: .82rem !important; line-height: 1.45; }
+    .event-image-info strong { color: var(--ink); font-size: .9rem; }
+    .event-image-info small { color: #52635d; font-variant-numeric: tabular-nums; }
+    .event-description { margin: 7px 0 0 !important; padding: 7px 10px; max-width: 62ch; border-radius: 8px; background: #edf3ef; color: #22322d; font-size: .9rem !important; line-height: 1.55; overflow-wrap: anywhere; }
+    .event-description > small { display: block; margin-bottom: 2px; font-size: .72rem; font-weight: 650; letter-spacing: .03em; color: #52635d; }
+    .event-pending { display: block; margin-top: 6px; color: #52635d; font-style: italic; }
+    .person-chip { display: inline-block; margin-inline-start: 8px; padding: 2px 9px; border-radius: 999px; background: var(--sage-strong); color: var(--ink); font-size: .78rem; font-weight: 650; vertical-align: 2px; }
+    .household-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .household-block h3 { margin: 0; font-size: .95rem; font-weight: 650; color: var(--paper); }
+    .household-list { list-style: none; margin: 4px 0 0; padding: 0; }
+    .household-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--paper); font-size: .88rem; }
+    .household-list li small { color: var(--paper-muted); }
+    .household-list .household-empty { border-bottom: 0; color: var(--paper-muted); }
+    .household-remove { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--danger); cursor: pointer; }
+    .household-remove:hover { background: #472729; }
+    .household-remove svg { width: 18px; height: 18px; }
+    #enrollPreview:not([hidden]) { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
+    .enroll-note { color: var(--paper-muted); font-size: .82rem; line-height: 1.5; }
+    #enrollFeedback { min-height: 1.2em; color: var(--danger); font-size: .85rem; }
+    .event-image-actions { display: flex; flex-direction: column; gap: 6px; }
+    .event-image-actions button { width: 44px; height: 44px; padding: 10px !important; border: 1px solid #b8c5be !important; border-radius: 8px !important; background: transparent !important; color: #33443d !important; }
+    .system-ledger { order: 2; padding: 2px 0 0 22px; position: sticky; top: 22px; color: var(--paper); }
+    .events-section { order: 1; }
+    .system-ledger h2 { color: var(--paper); }
+    .ledger-lead { margin: 8px 0 19px; color: var(--paper-muted); font-size: .9rem; line-height: 1.45; }
+    .ledger-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
+    .ledger-row span { color: var(--paper-muted); font-size: .85rem; }
+    .ledger-row strong { font-size: .88rem; }
+    .ledger-good { color: var(--sage-strong); }
+    .ledger-actions { display: grid; gap: 9px; margin-top: 20px; }
+    .secondary-action { width: 100%; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--paper); padding: 10px 12px; font-weight: 600; cursor: pointer; text-align: left; }
+    .secondary-action:hover { background: var(--ink-soft); }
+    .form-section { margin-top: 18px !important; padding: 18px !important; }
+    .form-section summary { cursor: pointer; color: var(--ink); font-weight: 650; }
+    .form-section form { margin-top: 16px; }
+    .form-section input { border: 1px solid #b4c0ba; border-radius: 9px; padding: 10px; }
+    .multi-view-wrapper { display: none !important; }
+    #multiView { margin-top: 22px; }
+    .modal { background: rgba(5, 9, 10, .78) !important; backdrop-filter: blur(12px); }
+    .modal-content { border: 1px solid rgba(232,238,235,.15) !important; border-radius: 16px !important; background: var(--ink-raised) !important; color: var(--paper) !important; box-shadow: var(--shadow-deep) !important; }
+    .modal input, .modal select { color: var(--paper) !important; background: #0e1819 !important; border-color: rgba(232,238,235,.24) !important; }
+    @media (max-width: 980px) {
+      .app-frame { grid-template-columns: 1fr; }
+      .app-rail { position: fixed; bottom: 12px; top: auto; left: 50%; transform: translateX(-50%); width: max-content; height: auto; flex-direction: row; padding: 8px; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-deep); }
+      .brand-mark, .rail-spacer, .app-rail .rail-button:nth-of-type(4) { display: none; }
+      .app-content { padding: 24px 20px 102px; }
+      .observatory-grid { grid-template-columns: 1fr; }
+      .system-ledger { position: static; padding: 0; }
+    }
+    @media (min-width: 651px) and (max-width: 980px) {
+      .camera-info { flex-direction: row !important; align-items: center !important; padding: 12px 13px !important; }
+      .camera-actions { width: auto !important; height: 44px !important; }
+      .camera-card .button-group { display: grid !important; grid-template-columns: repeat(3, 44px) !important; grid-auto-rows: 44px !important; width: auto !important; gap: 6px !important; }
+      .camera-card .icon-button { display: inline-grid !important; flex: none !important; width: 44px !important; min-width: 44px !important; height: 44px !important; padding: 0 !important; }
+    }
+    @media (max-width: 650px) {
+      body { overflow-x: hidden; }
+      .app-frame { width: 100vw; min-width: 0; max-width: 100vw; overflow-x: hidden; }
+      .app-content, .topbar, .topbar-actions, .camera-reel-section, .camera-grid, .observatory-grid, .events-section { width: 100%; min-width: 0; max-width: 100%; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .topbar-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+      .topbar-actions .primary-action { width: 100%; margin-left: 0; }
+      .local-status { font-size: .75rem; }
+      .camera-reel-section { overflow: visible; }
+      .camera-grid { display: grid !important; grid-template-columns: minmax(0, 1fr) !important; overflow: hidden !important; padding: 2px 0 14px !important; }
+      .camera-card, .camera-card:first-child { grid-column: 1; flex: none !important; width: 100% !important; max-width: 100% !important; min-width: 0 !important; margin: 0 !important; }
+      .camera-info { flex-direction: column !important; align-items: stretch !important; gap: 10px !important; padding: 12px 13px !important; }
+      .camera-actions { width: 100% !important; max-width: 100% !important; height: 44px !important; }
+      .camera-card .button-group { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)) !important; grid-auto-rows: 44px !important; width: 100% !important; max-width: 100% !important; gap: 7px !important; }
+      .camera-card .icon-button { display: inline-grid !important; flex: none !important; width: 100% !important; min-width: 0 !important; height: 44px !important; padding: 0 !important; }
+      .camera-empty { flex: 0 0 calc(100vw - 92px); width: calc(100vw - 92px); margin: 0 auto; padding: 24px 18px; }
+      .section-heading { align-items: flex-start; flex-direction: column; }
+      .section-heading .local-status { max-width: 100%; }
+      .section-heading .local-status select { min-width: 0; max-width: 180px; }
+      .events-filter { align-items: stretch; }
+      .events-filter .filter-group, #imageSearchInput { width: 100%; }
+      .events-filter select { width: 100%; }
+      #eventImagesContainer { grid-template-columns: 1fr; }
+    }
+    :root { --accent-primary: var(--sage-strong); --accent-hover: var(--sage); --accent-danger: #8b3038; --accent-danger-hover: #702630; }
+    html { color-scheme: dark; scrollbar-color: var(--sage) var(--ink); }
+    ::selection { background: var(--sage-strong); color: var(--ink); }
+    input, textarea { caret-color: var(--sage-strong); }
+    button:disabled { opacity: .6; cursor: wait; }
+    .rail-button { width: 44px; height: 44px; }
+    .modal { padding: 16px; overflow-y: auto; }
+    .modal-content { width: min(100%, 680px) !important; max-height: calc(100dvh - 32px); overflow-y: auto; margin: auto; }
+    .modal .close, .close-preview { display: grid; place-items: center; width: 44px; height: 44px; min-width: 44px; padding: 0; border: 0; background: transparent; color: var(--paper); cursor: pointer; }
+    #settingsContainer > div { flex-wrap: wrap; }
+    #settingsContainer label { min-width: min(100%, 220px); }
+    #settingsContainer input, #settingsContainer select { max-width: 100%; }
+    #settingsFeedback { color: var(--danger); }
+    #appFeedback { position: fixed; bottom: 84px; inset-inline: max(20px, calc((100vw - 680px) / 2)); z-index: 1100; padding: 16px 20px; background: var(--paper); color: var(--ink); border-radius: 12px; box-shadow: 0 8px 28px #0005; }
+    #appFeedback[hidden], #searchAvailability[hidden] { display: none; }
+    #searchAvailability { color: #33433e; line-height: 1.5; }
+    .event-preview { padding: 0; border: 0; background: transparent; cursor: pointer; }
+    .event-image-actions svg { width: 20px; height: 20px; }
+    .form-section { color-scheme: light; }
+    .form-section input { background: #f8fbf9; color: var(--ink); caret-color: var(--ink); }
+    .events-section { color-scheme: light; }
+    .local-status { white-space: normal; }
+    #pipelineDetail { font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
+    #eventImagesContainer { grid-template-columns: 1fr; }
+    .event-image-info { min-width: 0; overflow-wrap: anywhere; }
+    .event-image-item { min-width: 0; }
+    .form-section form { display: grid; gap: 8px; }
+    .form-section input:not([type=checkbox]), .form-section button, .events-filter select, .events-filter button, .modal button:not(.tooltip-icon) { min-height: 44px; }
+    .modal input:not([type=checkbox]), .modal select { min-height: 44px; font-size: 16px; }
+    @media (max-width: 650px) {
+      .events-filter { display: grid; grid-template-columns: minmax(0, 1fr); }
+      .events-filter input:not([type=checkbox]), .events-filter select { font-size: 16px; }
+      .event-image-item { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+      .event-image-item .event-preview { width: 100%; }
+      .event-image-item img { width: 100% !important; }
+      .event-image-actions { flex-direction: row; }
+      .modal-content { padding: 18px !important; }
+      .modal-header { align-items: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .camera-card, .rail-button, .icon-button { transition: none; }
+      .camera-card:hover { transform: none; }
+      .spinner { animation: none; border-style: dotted; }
+    }
   </style>
 </head>
 <body>
-  <div id="cameraList" class="camera-grid"></div>
+  <!--
+  THESIS: ClearCam is a household observatory: a private, local record of what the home has noticed, not an enterprise surveillance console.
+  OWN-WORLD: Deep ink surrounds mineral-paper working surfaces; sage marks calm system state and brass marks attention. Hairline seams, 14px corners, and macOS-native controls carry the interface.
+  STORY: One owner glances across cameras, selects a live view, reads the day’s observations, and reaches advanced controls only when needed.
+  FIRST VIEWPORT: A compact header and local-status mark lead into a horizontal camera reel. The selected camera is largest; the daily journal and health ledger sit immediately below.
+  FORM: Household observatory, camera reel + daily journal (approved comp .impeccable/mocks/clearcam-observatory-b.png; seed a77bbae5).
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md.
+  -->
+  <div class="app-frame">
+    <nav class="app-rail" aria-label="ClearCam navigation">
+      <div class="brand-mark" role="img" aria-label="ClearCam">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="7" width="13" height="10" rx="2.5"/><path d="m16 10 4-2v8l-4-2Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/><circle cx="9.5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <button class="rail-button active" type="button" aria-label="Camera overview" onclick="window.scrollTo({top: 0, behavior: 'smooth'})">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m9 9 5 3-5 3Z" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="rail-button" type="button" aria-label="Search observations" onclick="openJournalSearch()">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+      </button>
+      <button class="rail-button" type="button" aria-label="Global settings" onclick="openSettingsModal()"><svg aria-hidden="true"><use href="#icon-cog"></use></svg></button>
+      <span class="rail-spacer"></span>
+      <button class="rail-button" type="button" aria-label="Open multi-camera view" onclick="toggleMultiView()"><svg aria-hidden="true"><use href="#icon-play-all"></use></svg></button>
+    </nav>
+    <main class="app-content">
+      <header class="topbar">
+        <div>
+          <h1>ClearCam</h1>
+          <p>Home, observed. Nothing leaves this Mac by default.</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="local-status" role="status" id="engineState">Checking engine…</span>
+          <button class="primary-action" type="button" onclick="document.getElementById('cameraSetup').open = true; document.getElementById('cameraSetup').scrollIntoView({behavior: 'smooth', block: 'center'}); document.querySelector('#addCameraForm input[name=cam_name]').focus()">Add camera</button>
+        </div>
+      </header>
+      <section class="camera-reel-section" aria-labelledby="camera-reel-heading">
+        <div class="section-heading">
+          <div><h2 id="camera-reel-heading">Camera reel</h2><p>Choose a view, then keep an eye on the day.</p></div>
+          <label for="streamDateSelect" class="local-status">Replay <select id="streamDateSelect"><option value="">Loading dates...</option></select></label>
+        </div>
+        <div id="cameraList" class="camera-grid"><div class="camera-empty"><div><strong>No cameras are connected yet.</strong>Add your first camera locally.</div></div></div>
+      </section>
   <div class="multi-view-wrapper">
     <button onclick="openSettingsModal()">Settings</button>
     <button onclick="toggleMultiView()">Multi View</button>
-    <div class="date-picker-container">
-      <select id="streamDateSelect" style="padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 14px; background: var(--bg-primary); color: var(--text-primary);">
-        <option value="">Loading dates...</option>
-      </select>
-    </div>
   </div>
 
-  <div class="form-section">
-    <form id="addCameraForm">
-      <input type="text" name="cam_name" placeholder="Camera Name" required>
-      <input type="text" name="src" placeholder="RTSP Link" required>
-      <button type="submit">Add Camera</button>
-    </form>
-    <div class="analyse-section" style="margin-top: 15px;">
-      <form id="analyseFootageForm">
-        <input type="file" id="videoFileInput" accept="video/*" required>
-        <button type="submit" id="analyseBtn">
-          <span class="btn-spinner" style="display:none;"></span>
-          <span class="btn-text">Analyse Footage</span>
-        </button>
-      </form>
-    </div>
-    <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
-      <div class="spinner" style="margin-bottom:6px;"></div>
-      <small id="analyseProgressText">Uploading 0%</small>
-    </div>
-    <div class="max-storage-control" style="display: flex; flex-direction: column; align-items: flex-start; margin-top: 10px;">
-      <label for="maxStorageInput" style="margin-bottom: 4px;">Set Max Storage (GB):</label>
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <input type="number" id="maxStorageInput" min="1" style="width: 120px;">
-        <button type="button" id="setMaxStorageBtn">Set</button>
-      </div>
-    </div>
-  </div>
+  <div class="observatory-grid">
 
-  <div class="events-section">
-    <h3>Detected Events</h3>
+
+  <section class="events-section" aria-labelledby="journal-heading">
+    <div class="journal-heading"><div><h2 id="journal-heading">Daily journal</h2><p>Recent detections from your own cameras.</p><button id="journalRetry" class="retry-journal" type="button" hidden onclick="window.location.reload()">Try again</button></div></div>
     <div class="events-filter">
       <div class="filter-group">
         <label for="cameraFilter">Camera:</label>
@@ -1377,19 +1588,74 @@
 
     <button onclick="clearSearch()" id="clearButton" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s;">Clear</button>
   </div>
+  </div>
+  <p id="searchAvailability" role="status" hidden>Text and image search are off. Enable OpenCLIP Search in Global settings to search observations. Camera and date filters are still available.</p>
   <div id="eventImagesContainer">
     <p style="text-align:center; color:#666; width:100%;">No events detected yet.</p>
   </div>
 
-  <div style="width:100vw; display:flex; justify-content:center; margin-top:12px;">
+  <div style="width:100%; display:flex; justify-content:center; margin-top:12px;">
     <button onclick="loadMoreEventImages()" id="loadMoreEventsBtn" style="padding: 6px 12px; background: var(--accent-primary); color: white; border: none; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
       <span id="loadMoreText">More results</span>
       <div id="loadMoreSpinner" class="spinner" style="display: none;"></div>
     </button>
   </div>
+  </section>
+  <aside class="system-ledger" aria-labelledby="system-ledger-heading">
+    <h2 id="system-ledger-heading">This Mac</h2>
+    <p class="ledger-lead">Your camera feeds, recordings, and detection history live here.</p>
+    <div class="ledger-row"><span>Video processing</span><strong class="ledger-good">Local</strong></div>
+    <div class="ledger-row"><span>AI descriptions</span><strong id="localAIState" role="status">Checking…</strong></div>
+    <div class="ledger-row"><span>Alert rules</span><strong id="notificationState">Checking…</strong></div>
+    <div class="ledger-row"><span>Review date</span><strong id="reviewState">Checking…</strong></div>
+    <p id="pipelineDetail" role="status" class="ledger-lead"></p>
+    <p id="storageWarning" role="alert" class="ledger-lead" hidden></p>
+    <section class="household-block" aria-labelledby="household-heading">
+      <h3 id="household-heading">Household</h3>
+      <p class="ledger-lead">Name people from their journal events; recognized names appear on future events and notifications. Faces never leave this Mac.</p>
+      <ul id="householdList" class="household-list"></ul>
+    </section>
+    <div class="ledger-actions">
+      <button class="secondary-action" type="button" onclick="openSettingsModal()">Global settings</button>
+      <button class="secondary-action" type="button" onclick="toggleMultiView()">Open multi-camera view</button>
+    </div>
+    <details class="form-section" id="cameraSetup">
+      <summary>Camera &amp; storage setup</summary>
+    <form id="addCameraForm">
+      <label for="cameraNameInput">Camera name</label>
+      <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
+      <label for="cameraSourceInput">Camera stream address</label>
+      <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://…" required autocomplete="off">
+      <button type="submit">Add Camera</button>
+    </form>
+    <div class="analyse-section" style="margin-top: 15px;">
+      <form id="analyseFootageForm">
+        <label for="videoFileInput">Video to analyse</label>
+        <input type="file" id="videoFileInput" accept="video/*" required>
+        <button type="submit" id="analyseBtn">
+          <span class="btn-spinner" style="display:none;"></span>
+          <span class="btn-text">Analyse Footage</span>
+        </button>
+      </form>
+    </div>
+    <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
+      <div class="spinner" style="margin-bottom:6px;"></div>
+      <small id="analyseProgressText">Uploading 0%</small>
+    </div>
+    <div class="max-storage-control" style="display: flex; flex-direction: column; align-items: flex-start; margin-top: 10px;">
+      <label for="maxStorageInput" style="margin-bottom: 4px;">Set Max Storage (GB):</label>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <input type="number" id="maxStorageInput" min="1" style="width: 120px;">
+        <button type="button" id="setMaxStorageBtn">Set</button>
+      </div>
+    </div>
+    </details>
+  </aside>
   </div>
   
   <div id="multiView"></div>
+    </main>
+  </div>
 
   <!-- Image Preview Modal -->
   <div id="imagePreviewModal" class="modal">
@@ -1404,7 +1670,7 @@
             <span class="close" onclick="closeZoneModal()">&times;</span>
         </div>
         <div style="position: relative; display: inline-block; max-width: 100%;">
-            <img id="zonePreview" src="/testcam/preview.png"
+            <img id="zonePreview"
                 style="width: 100%; max-height: 400px; object-fit: contain; border: 1px solid #ccc; border-radius: 6px; user-select: none; -webkit-user-drag: none; cursor: crosshair;">
             <div id="polygonOverlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></div>
         </div>
@@ -1470,9 +1736,30 @@
           <p>Loading settings...</p>
         </div>
 
+        <p id="settingsFeedback" role="alert"></p>
         <div class="form-actions" style="margin-top: 20px; display: flex; justify-content: center;">
-          <button type="button" onclick="saveSettings()">Save</button>
+          <button type="button" onclick="saveSettings()">Save changes</button>
         </div>
+      </div>
+    </div>
+
+    <div id="enrollModal" class="modal">
+      <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-header">
+          <h3>Name this person</h3>
+          <span class="close" onclick="closeEnrollModal()">&times;</span>
+        </div>
+        <form id="enrollForm" onsubmit="submitEnrollment(event)">
+          <img id="enrollPreview" alt="" hidden>
+          <label for="enrollNameInput">Who is this?</label>
+          <input id="enrollNameInput" type="text" maxlength="60" placeholder="e.g. Ulysses" required autocomplete="off">
+          <p class="enroll-note">ClearCam learns this face locally. Add a few events of the same person for more reliable matches.</p>
+          <p id="enrollFeedback" role="alert"></p>
+          <div class="form-actions">
+            <button type="button" onclick="closeEnrollModal()">Cancel</button>
+            <button type="submit">Save person</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -1580,6 +1867,10 @@
       <path d="M8 5v14l11-7z"/>
     </symbol>
 
+    <symbol id="icon-person" viewBox="0 0 24 24">
+      <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+    </symbol>
+
     <symbol id="icon-cog" viewBox="0 0 24 24">
       <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3" />
@@ -1620,7 +1911,8 @@
     </symbol>
     </svg>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <div id="appFeedback" role="status" tabindex="-1" hidden></div>
+  <script src="/vendor/hls.min.js"></script>
 <script>
     let is_face = false;
     let autoRefreshInterval = null;
@@ -1681,7 +1973,7 @@
     };
 
     let eventStart = 0;
-    const EVENT_PAGE_SIZE = 50;
+    const EVENT_PAGE_SIZE = 20;
     let hasMoreEvents = true;
 
     function openAlertsModal(cameraName) {
@@ -1698,7 +1990,7 @@
     function startAutoRefresh() {
         if (autoRefreshInterval) clearInterval(autoRefreshInterval);
         autoRefreshInterval = setInterval(() => {
-            if (!dontRefresh) {
+            if (!dontRefresh && !document.hidden) {
                 loadEventImages(false);
             }
         }, 5000);
@@ -2147,8 +2439,9 @@
         })
         .catch(err => {
           console.error('Failed to load dates:', err);
-          dateSelect.innerHTML = '<option value="">Error loading dates</option>';
-          eventDateFilter.innerHTML = '<option value="">Error loading dates</option>';
+          dateSelect.innerHTML = '<option value="">Could not load dates</option>';
+          eventDateFilter.innerHTML = '<option value="">Could not load dates</option>';
+          document.getElementById('journalRetry').hidden = false;
         });
       
       // Stream date dropdown listener
@@ -2187,12 +2480,20 @@
     }
 
     async function fetchCameras() {
+      const container = document.getElementById("cameraList");
+      try {
       const res = await fetch('/list_cameras');
+      if (!res.ok) throw new Error(`Camera list request failed (${res.status})`);
       const camsObj = await res.json();
       const cams = Object.keys(camsObj);
-      const container = document.getElementById("cameraList");
 
       populateCameraFilter(cams);
+
+      if (cams.length === 0) {
+        container.innerHTML = '<div class="camera-empty"><div><strong>No cameras are connected yet.</strong>Add your first camera locally.</div></div>';
+        window.currentCameras = [];
+        return;
+      }
 
       const previousCameras = window.currentCameras || [];
       window.currentCameras = cams;
@@ -2259,6 +2560,11 @@
           cleanupCameraStream(cameraName);
         }
       });
+      } catch (error) {
+        console.error('Unable to load cameras:', error);
+        container.innerHTML = '<div class="camera-empty camera-error"><div><strong>ClearCam cannot reach its local engine.</strong><span>Check that it is running on this Mac, then try again.</span><button type="button" class="retry-camera" onclick="fetchCameras()">Try again</button></div></div>';
+        window.currentCameras = [];
+      }
     }
 
     document.addEventListener('DOMContentLoaded', function() {
@@ -2283,24 +2589,24 @@
       
       card.innerHTML = `
         <div class="video-container">
-          <video id="${videoId}" controls muted playsinline></video>
-          <div class="video-placeholder" id="${placeholderId}">Loading stream...</div>
+          <video controls muted playsinline></video>
+          <div class="video-placeholder">Loading stream...</div>
         </div>
         <div class="camera-info">
-          <span class="camera-name">${camName}</span>
-          <div style="display: flex; gap: 6px; align-items: center;">
+          <span class="camera-name"></span>
+          <div class="camera-actions">
             <div class="button-group">
-              <button class="icon-button" onclick="openSettingsEditor('${camName}')" title="Settings">
+              <button class="icon-button" type="button" title="Settings" aria-label="Camera settings">
                 <span class="icon">
                   <svg><use href="#icon-cog"></use></svg>
                 </span>
               </button>
-              <button class="icon-button" onclick="openAlertsModal('${camName}')" title="Alerts">
+              <button class="icon-button" type="button" title="Alerts" aria-label="Camera alerts">
                 <span class="icon">
                   <svg><use href="#icon-bell"></use></svg>
                 </span>
               </button>
-              <button class="icon-button delete-button" onclick="deleteCamera('${camName}')" title="Delete">
+              <button class="icon-button delete-button" type="button" title="Delete" aria-label="Delete camera">
                 <span class="icon">
                   <svg><use href="#icon-bin"></use></svg>
                 </span>
@@ -2309,6 +2615,18 @@
           </div>
         </div>
       `;
+      card.querySelector('video').id = videoId;
+      card.querySelector('.video-placeholder').id = placeholderId;
+      card.querySelector('.camera-name').textContent = camName;
+      [openSettingsEditor, openAlertsModal, deleteCamera].forEach((action, index) => {
+        card.querySelectorAll('.icon-button')[index].addEventListener('click', () => action(camName));
+      });
+      card.addEventListener('click', (event) => {
+        if (event.target.closest('button, video')) return;
+        document.querySelectorAll('.camera-card').forEach(item => item.classList.remove('selected'));
+        card.classList.add('selected');
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      });
       setTimeout(() => initDetectionSettings(camName), 100);
       return card;
     }
@@ -2323,10 +2641,10 @@
             isPolygonComplete: false
         };
         const zonePreview = document.getElementById("zonePreview");
-        zonePreview.src = `/${cameraName}/preview.png`;
+        zonePreview.src = `/${encodeURIComponent(cameraName)}/preview.png`;
         zoneModal.style.display = "flex";
         initZoneEditor();
-        fetch(`/get_settings?cam=${cameraName}`)
+        fetch(`/get_settings?cam=${encodeURIComponent(cameraName)}`)
             .then(res => res.json())
             .then(data => {
                 console.log("Received settings data:", data);
@@ -2652,21 +2970,28 @@
         console.warn(`Video element not found for ${camName}`);
         return;
       }
-      const checkbox = document.querySelector(`.show-detections-checkbox[data-camera="${camName}"]`);
+      const checkbox = [...document.querySelectorAll('.show-detections-checkbox')].find(el => el.dataset.camera === camName);
       const showDetections = checkbox ? checkbox.checked : false;
       
       const encoded = encodeURIComponent(camName);
       const baseUrl = window.location.origin;
-      const streamUrl = `${baseUrl}/${encoded}/streams/${currentStreamDate}/stream.m3u8`;
+      // Live viewing follows the rolling live-edge playlist; replaying an event
+      // or browsing a past day needs the full recorded playlist to seek within.
+      const isReplay = pendingReplay.get(camName)?.folder === currentStreamDate;
+      const isToday = currentStreamDate === new Date().toLocaleDateString('en-CA');
+      const playlistName = (isToday && !isReplay) ? 'live.m3u8' : 'stream.m3u8';
+      const streamUrl = `${baseUrl}/${encoded}/streams/${currentStreamDate}/${playlistName}`;
       
-      activeVideoStreams.set(camName, {
+      const session = {
         video: video,
         hls: null,
         streamUrl: streamUrl,
         isPlaying: false
-      });
+      };
+      activeVideoStreams.set(camName, session);
       
       waitForManifest(streamUrl, 30, 1000).then(ready => {
+        if (activeVideoStreams.get(camName) !== session) return;
         if (!ready) {
           if (placeholder) placeholder.textContent = 'Stream unavailable';
           return;
@@ -2674,22 +2999,28 @@
         
         if (placeholder) placeholder.style.display = 'none';
         
-        if (Hls.isSupported()) {
+        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           const hls = new Hls({
+            startPosition: isReplay ? pendingReplay.get(camName).offset : -1,
             manifestLoadingTimeOut: 20000,
             manifestLoadingMaxRetry: Infinity,
             manifestLoadingRetryDelay: 2000,
+            liveSyncDurationCount: 2,
+            liveMaxLatencyDurationCount: 6,
           });
 
           hls.loadSource(streamUrl);
           hls.attachMedia(video);
 
           hls.on(Hls.Events.MANIFEST_PARSED, function () {
+            if (activeVideoStreams.get(camName) !== session) return;
+            applyPendingReplay(camName);
             video.play().catch(e => console.log('Auto-play prevented:', e));
             activeVideoStreams.get(camName).isPlaying = true;
           });
 
           hls.on(Hls.Events.ERROR, function (event, data) {
+            if (activeVideoStreams.get(camName) !== session) return;
             if (data && data.fatal) {
               switch (data.type) {
                 case Hls.ErrorTypes.NETWORK_ERROR:
@@ -2714,6 +3045,8 @@
           video.src = streamUrl;
           video.addEventListener('loadedmetadata', function onMeta() {
             video.removeEventListener('loadedmetadata', onMeta);
+            if (activeVideoStreams.get(camName) !== session) return;
+            applyPendingReplay(camName);
             video.play().catch(e => console.log('Auto-play prevented:', e));
             activeVideoStreams.get(camName).isPlaying = true;
           });
@@ -2724,6 +3057,7 @@
           }
         }
       }).catch(error => {
+        if (activeVideoStreams.get(camName) !== session) return;
         console.error(`Error starting stream for ${camName}:`, error);
         if (placeholder) {
           placeholder.textContent = 'Stream error';
@@ -2734,7 +3068,7 @@
 
     const detectionIntervals = new Map();
     function initDetectionSettings(cameraName) {
-      const checkbox = document.querySelector(`.show-detections-checkbox[data-camera="${cameraName}"]`);
+      const checkbox = [...document.querySelectorAll('.show-detections-checkbox')].find(el => el.dataset.camera === cameraName);
       if (!checkbox) return;
       fetch(`/get_settings?cam=${encodeURIComponent(cameraName)}`)
         .then(res => res.json())
@@ -2771,7 +3105,7 @@
     async function deleteCamera(cam) {
       if (!confirm(`Are you sure you want to delete ${cam}?`)) return;
       cleanupCameraStream(cam);
-      const res = await fetch(`/delete_camera?cam_name=${cam}`);
+      const res = await fetch(`/delete_camera?cam_name=${encodeURIComponent(cam)}`);
       if (res.ok) {
         fetchCameras();
       } else {
@@ -2784,7 +3118,10 @@
         const res = await fetch('/get_max_storage');
         const data = await res.json();
         const input = document.getElementById('maxStorageInput');
-        if (input && data.max_gb !== undefined) {
+        const warning = document.getElementById('storageWarning');
+        warning.textContent = data.warning || '';
+        warning.hidden = !data.warning;
+        if (input && data.max_gb !== undefined && !input.dataset.dirty && document.activeElement !== input) {
           input.value = data.max_gb;
         }
       } catch (e) {
@@ -2795,25 +3132,38 @@
     async function setMaxStorage() {
       const input = document.getElementById('maxStorageInput');
       const newVal = parseFloat(input.value);
-      if (!newVal || isNaN(newVal)) {
+      if (!Number.isFinite(newVal) || newVal < 1) {
         alert("Please enter a valid number");
         return;
       }
       if (!confirm(`Set max storage to ${newVal} GB?`)) return;
-      await fetch(`/set_max_storage?max=${newVal}`);
-      fetchMaxStorage();
+      try {
+        const response = await fetch(`/set_max_storage?max=${newVal}`);
+        if (!response.ok) throw new Error();
+        delete input.dataset.dirty;
+        announce('Storage limit saved.');
+        fetchMaxStorage();
+      } catch (_) { announce('Storage limit was not saved. Keep your value and try again.', true); }
     }
     document.getElementById('setMaxStorageBtn').addEventListener('click', setMaxStorage);
+    document.getElementById('maxStorageInput').addEventListener('input', event => event.target.dataset.dirty = 'true');
     fetchMaxStorage();
-    setInterval(fetchMaxStorage, 10000);
+    pollVisible(fetchMaxStorage, 10000);
 
     document.getElementById("addCameraForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const form = e.target;
       const params = new URLSearchParams(new FormData(form)).toString();
-      await fetch(`/add_camera?${params}`);
-      form.reset();
-      fetchCameras();
+      const submit = form.querySelector('button[type=submit]');
+      submit.disabled = true;
+      try {
+        const response = await fetch(`/add_camera?${params}`);
+        if (!response.ok) throw new Error();
+        form.reset();
+        announce('Camera added. Connecting to the stream…');
+        fetchCameras();
+      } catch (_) { announce('Camera was not added. Check its name and stream address, then try again.', true); }
+      finally { submit.disabled = false; }
     });
 
     async function waitForManifest(url, maxRetries = 30, delay = 2000) {
@@ -2837,7 +3187,7 @@
     }
 
     function attachHlsToVideo(url, video, startTime = null) {
-      if (Hls.isSupported()) {
+          if (typeof Hls !== 'undefined' && Hls.isSupported()) {
         const hls = new Hls({
           manifestLoadingTimeOut: 20000,
           manifestLoadingMaxRetry: Infinity,
@@ -2912,7 +3262,8 @@
 
       cams.forEach(cam => {
         const encoded = encodeURIComponent(cam);
-        const videoUrl = `${base}/${encoded}/streams/${currentStreamDate}/stream.m3u8`;
+        const liveDay = currentStreamDate === new Date().toLocaleDateString('en-CA');
+        const videoUrl = `${base}/${encoded}/streams/${currentStreamDate}/${liveDay ? 'live.m3u8' : 'stream.m3u8'}`;
 
         const wrapper = document.createElement('div');
         wrapper.className = 'video-wrapper';
@@ -3096,7 +3447,11 @@
 
     
     let previousEventImages = null;
+    let eventRequest = null;
     async function loadEventImages(append=false, face=null) {
+      eventRequest?.abort();
+      const request = new AbortController();
+      eventRequest = request;
       if(face != null) is_face = face;
       dontRefresh = true;
       if (!append) {
@@ -3120,12 +3475,12 @@
           payload.uploaded_image = uploadedImageData;
         } else if (currentSimilarImage) {
           payload.similar_img = `/${currentSimilarImage}`;
-          currentSimilarImage = null;
         } else if (currentImageSearchText) {
           is_face = false;
           payload.image_text = currentImageSearchText;
         }
         const res = await fetch("/event_thumbs", {
+          signal: request.signal,
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -3133,8 +3488,10 @@
           body: JSON.stringify(payload)
         });
 
+        if (!res.ok) throw new Error('Journal request failed');
         const data = await res.json();
-
+        if (eventRequest !== request) return;
+        document.getElementById('journalRetry').hidden = true;
         eventStart += data.images.length;
         hasMoreEvents = data.images.length === EVENT_PAGE_SIZE;
         document.getElementById('loadMoreEventsBtn').style.display =
@@ -3155,12 +3512,12 @@
               if (a.folder !== b.folder) {
                 return b.folder.localeCompare(a.folder);
               }
-              return b.timestamp - a.timestamp;
+              return (b.captured_at ?? b.timestamp ?? 0) - (a.captured_at ?? a.timestamp ?? 0);
             });
           }
         }
 
-        if (JSON.stringify(data) === JSON.stringify(previousEventImages)) {
+        if (!append && JSON.stringify(data) === JSON.stringify(previousEventImages)) {
           return;
         }
         previousEventImages = data;
@@ -3168,70 +3525,26 @@
         const container = document.getElementById("eventImagesContainer");
         
         if (data.images && data.images.length > 0) {
-          let html = '';
-          [...data.images].forEach(img => {
-          const timeStr = secondsToTimeString(img.timestamp);
-          const hasScore = typeof img.score === 'number';
-          const scoreHtml = hasScore ? ` | Match: ${img.score.toFixed(2)}` : '';
-
-          html += `
-            <div class="event-image-item">
-              <img src="${img.url}" alt="Event" loading="lazy"
-                  onclick="viewImage('${img.url}')">
-
-              <div class="event-image-info">
-                <strong>${img.cam_name || 'Camera'}</strong><br>
-                <small>
-                  ${img.folder} ${timeStr}${scoreHtml}
-                </small>
-              </div>
-
-              <div class="event-image-actions">
-                ${
-                  hasScore
-                    ? `
-                      <button title="Search Similar"
-                              onclick="searchWithImage('${img.url}')">
-                        <span class="icon">
-                          <svg><use href="#icon-magnify"></use></svg>
-                        </span>
-                      </button>
-                    `
-                    : ''
-                }
-
-                <button title="Play"
-                        onclick="playVideoAtTime('${img.cam_name}', ${img.timestamp}, '${img.folder}')">
-                  <span class="icon">
-                    <svg><use href="#icon-play"></use></svg>
-                  </span>
-                </button>
-
-                <button title="Play All"
-                        onclick="playAllCamerasAtTime(${img.timestamp}, '${img.folder}')">
-                  <span class="icon">
-                    <svg><use href="#icon-play-all"></use></svg>
-                  </span>
-                </button>
-              </div>
-            </div>
-          `;
-        });
-          if (append) {
-            container.insertAdjacentHTML('beforeend', html);
-          } else {
-            container.innerHTML = html;
-          }
+          const fragment = document.createDocumentFragment();
+          data.images.forEach(img => fragment.appendChild(createEventCard(img)));
+          if (!append) container.replaceChildren();
+          container.appendChild(fragment);
         } else {
           container.innerHTML =
             '<p style="text-align:center; color:#666; width:100%;">No events detected yet.</p>';
         }
       } catch (err) {
+        if (err.name === 'AbortError' || eventRequest !== request) return;
+        previousEventImages = null;
         console.error("Failed to load event images:", err);
         document.getElementById("eventImagesContainer").innerHTML =
-          '<p style="text-align:center; color:red; width:100%;">Error loading events.</p>';
+          '<p style="text-align:center; color:#9d312c; width:100%;">Could not load observations. Check that the local engine is running, then try again.</p>';
+        document.getElementById('journalRetry').hidden = false;
 
       } finally {
+        if (eventRequest !== request) return;
+        eventRequest = null;
+        dontRefresh = Boolean(currentImageSearchText || currentSimilarImage || uploadedImageData || append);
         const searchButton = document.getElementById('searchButton');
         const searchText = document.getElementById('searchText');
         const searchSpinner = document.getElementById('searchSpinner');
@@ -3266,9 +3579,6 @@
         btn.disabled = false;
         text.textContent = 'More results';
         spinner.style.display = 'none';
-        if (!append && !dontRefresh) {
-            dontRefresh = false;
-        }
       }
     }
 
@@ -3373,58 +3683,58 @@
       document.getElementById("imagePreviewModal").style.display = "none";
     }
 
+    const pendingReplay = new Map();
+    function applyPendingReplay(camName) {
+      const request = pendingReplay.get(camName);
+      const video = document.getElementById('video-' + camName);
+      if (!request || request.folder !== currentStreamDate || !video || video.readyState < 1) return;
+      video.currentTime = request.offset;
+      pendingReplay.delete(camName);
+      video.play().catch(() => {});
+    }
+    document.addEventListener('loadedmetadata', event => {
+      if (event.target instanceof HTMLVideoElement) {
+        applyPendingReplay(event.target.id.replace(/^video-/, ''));
+      }
+    }, true);
+
     function playVideoAtTime(camName, timestamp, folder) {
-      if(folder != document.getElementById('streamDateSelect').value){
+      if (!Number.isFinite(timestamp)) {
+        announce('Recording for this event is unavailable.', true);
+        return;
+      }
+      const video = document.getElementById('video-' + camName);
+      if (!video) { announce('This camera is not in the current view.', true); return; }
+      pendingReplay.set(camName, {offset: Math.max(0, timestamp), folder});
+      if (folder !== currentStreamDate) {
         document.getElementById('streamDateSelect').value = folder;
         currentStreamDate = folder;
         restartAllStreams();
-      }
-      const videoId = `video-${camName}`;
-      const video = document.getElementById(videoId);      
-      if (video) {
-        video.currentTime = timestamp;
-        video.play().catch(e => console.log('Auto-play prevented:', e));
-        const cameraCard = video.closest('.camera-card');
-        if (cameraCard) {
-          cameraCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          cameraCard.style.boxShadow = '0 0 0 3px #007bff';
-          setTimeout(() => {
-            cameraCard.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-          }, 2000);
-        }
+      } else if (activeVideoStreams.get(camName)?.streamUrl?.endsWith('/live.m3u8')) {
+        // Seek offsets are meaningless inside the rolling live window; reattach
+        // this camera to the full recording, which startCameraStream picks for replays.
+        cleanupCameraStream(camName);
+        startCameraStream(camName);
       } else {
-        alert(`Camera ${camName} not found in current view`);
+        applyPendingReplay(camName);
       }
+      video.closest('.camera-card')?.scrollIntoView({behavior: 'smooth', block: 'center'});
     }
 
-    function playAllCamerasAtTime(timestamp, folder) {
-      if(folder != document.getElementById('streamDateSelect').value){
-        document.getElementById('streamDateSelect').value = folder;
-        currentStreamDate = folder;
-        restartAllStreams();
-      }
-      if (window.currentCameras && window.currentCameras.length > 0) {
-        window.currentCameras.forEach(camName => {
-          const videoId = `video-${camName}`;
-          const video = document.getElementById(videoId);
-          if (video) {
-            video.currentTime = timestamp;
-            video.play().catch(e => console.log(`Auto-play prevented for ${camName}:`, e));
-          }
-        });
-        const firstCameraCard = document.querySelector('.camera-card');
-        if (firstCameraCard) {
-          firstCameraCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        document.querySelectorAll('.camera-card').forEach(card => {
-          card.style.boxShadow = '0 0 0 3px #6f42c1';
-          setTimeout(() => {
-            card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-          }, 2000);
-        });
-      } else {
-        alert("No cameras available to play");
-      }
+    async function playAllCamerasAtTime(capturedAt, folder) {
+      if (!Number.isFinite(capturedAt)) return;
+      try {
+        const positions = await Promise.all((window.currentCameras || []).map(async camName => {
+          const query = new URLSearchParams({cam: camName, folder, at: capturedAt - 5});
+          const response = await fetch('/replay_position?' + query);
+          if (!response.ok) throw new Error('Replay lookup failed');
+          return {camName, ...(await response.json())};
+        }));
+        const available = positions.filter(item => Number.isFinite(item.playback_offset));
+        for (const item of available) playVideoAtTime(item.camName, item.playback_offset, folder);
+        const missing = positions.length - available.length;
+        if (missing || !positions.length) announce(missing + ' cameras have no recording at this time.', true);
+      } catch (_) { announce('Could not locate the matching recordings. Try again.', true); }
     }
     window.addEventListener("click", function(event) {
       const modal = document.getElementById("imagePreviewModal");
@@ -3432,26 +3742,23 @@
         closeImagePreview();
       }
     });
-    document.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape') {
-        closeImagePreview();
-      }
-    });
 
     async function openSettingsModal() {
       const modal = document.getElementById("settingsModal");
       modal.style.display = "flex";
+      document.getElementById('settingsFeedback').textContent = '';
 
       const container = document.getElementById("settingsContainer");
       container.innerHTML = "<p>Loading settings...</p>";
 
       try {
         const res = await fetch("/get_global_settings");
+        if (!res.ok) throw new Error();
         const data = await res.json();
 
         renderSettings(data);
       } catch (e) {
-        container.innerHTML = "<p style='color:red;'>Failed to load settings</p>";
+        container.innerHTML = '<p role="alert">Settings could not be loaded. Close this dialog and try again.</p>';
       }
     }
 
@@ -3469,7 +3776,7 @@
         "use_face": "Face Detection (Experimental)",
         "model_size": "YOLOv9 Model",
         "model_res": "YOLOv9 Resolution",
-        "use_qwen": "AI Event Summaries (Qwen3VL)",
+        "use_qwen": "Local AI event descriptions (Qwen3-VL)",
         "qwen_size": "Qwen3VL Size",
         "userID": "User ID",
         "key": "Key"
@@ -3480,7 +3787,7 @@
         "use_face": "Enables searching detected people using a face image.",
         "model_size": "YOLOv9 Detection model size (tiny, small, medium, compact, extended)",
         "model_res": "Sets the input resolution for YOLOv9 detection.",
-        "use_qwen": "Enables AI-powered event summaries for notifications using Qwen3VL vision-language model (Clearcam User ID required).",
+        "use_qwen": "Describes event images on this Mac for the journal and local notifications. No account required. Downloads model files on first use; images stay local. AI descriptions may be inaccurate.",
         "qwen_size": "Select the Qwen3VL model size (2B or 4B parameters).",
         "userID": "Your account user ID for notifications and remote config.",
         "key": "Secret key for encrypting event clips."
@@ -3556,6 +3863,8 @@
           input.style.width = "120px";
         }
         input.dataset.key = key;
+        input.id = `setting-${key}`;
+        label.htmlFor = input.id;
         wrapper.appendChild(label);
         wrapper.appendChild(input);
         container.appendChild(wrapper);
@@ -3609,20 +3918,298 @@
       }
 
       const body = JSON.stringify(payload);
-      closeSettingsModal();
-      fetch("/edit_settings", {
+      const saveButton = document.querySelector('#settingsModal .form-actions button');
+      saveButton.disabled = true;
+      saveButton.textContent = 'Saving…';
+      document.getElementById('settingsFeedback').textContent = '';
+      try {
+      const response = await fetch("/edit_settings", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: body
-      }).catch(e => {
-        console.error("Failed to save settings:", e);
       });
+      if (!response.ok) throw new Error();
+      closeSettingsModal();
+      announce('Settings saved.');
+      loadFeatureFlags();
+      refreshLocalAIStatus();
+      } catch (_) {
+        document.getElementById('settingsFeedback').textContent = 'Settings were not saved. Your changes are still here; try again.';
+      } finally {
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save changes';
+      }
     }
 
+    function createEventCard(img) {
+      const card = document.createElement('article');
+      card.className = 'event-image-item';
+      const preview = document.createElement('button');
+      preview.className = 'event-preview';
+      preview.type = 'button';
+      preview.setAttribute('aria-label', `Preview event from ${img.cam_name || 'camera'}`);
+      const image = document.createElement('img');
+      image.src = img.url; image.alt = ''; image.loading = 'lazy';
+      preview.append(image);
+      preview.addEventListener('click', () => viewImage(img.url));
+      const info = document.createElement('div');
+      info.className = 'event-image-info';
+      const title = document.createElement('strong'); title.textContent = img.cam_name || 'Camera';
+      if (Array.isArray(img.people)) for (const person of img.people) {
+        const chip = document.createElement('span'); chip.className = 'person-chip';
+        chip.textContent = person; title.append(chip);
+      }
+      const date = document.createElement('small');
+      const when = Number.isFinite(img.captured_at) ? new Date(img.captured_at * 1000).toLocaleString() : `Video · ${secondsToTimeString(img.playback_offset ?? 0)}`;
+      date.textContent = `${when}${typeof img.score === 'number' ? ` | Match: ${img.score.toFixed(2)}` : ''}`;
+      if (img.time_source === 'file_time') date.title = 'Time estimated from the saved event image';
+      info.append(title, document.createElement('br'), date);
+      if (img.description) {
+        const description = document.createElement('p'); description.className = 'event-description';
+        const label = document.createElement('small'); label.textContent = 'AI description';
+        description.append(label, document.createTextNode(img.description));
+        info.append(description);
+      } else if (window.localAIEnabled) {
+        const pending = document.createElement('small'); pending.className = 'event-pending';
+        pending.textContent = 'AI description on the way — it appears here when ready.';
+        info.append(pending);
+      }
+      const actions = document.createElement('div'); actions.className = 'event-image-actions';
+      const action = (name, icon, callback) => {
+        const button = document.createElement('button'); button.type = 'button'; button.title = name;
+        button.setAttribute('aria-label', name);
+        button.innerHTML = `<svg aria-hidden="true"><use href="#${icon}"></use></svg>`;
+        button.addEventListener('click', callback); actions.append(button);
+        return button;
+      };
+      if (typeof img.score === 'number') action('Search Similar', 'icon-magnify', () => searchWithImage(img.url));
+      action('Name this person', 'icon-person', () => openEnrollModal(img.url));
+      const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder));
+      play.disabled = !Number.isFinite(img.playback_offset);
+      if (play.disabled) {
+        play.title = 'Recording for this event is unavailable';
+        const unavailable = document.createElement('small');
+        unavailable.textContent = 'Recording unavailable';
+        info.append(document.createElement('br'), unavailable);
+      }
+      const all = action('Play all cameras', 'icon-play-all', () => playAllCamerasAtTime(img.captured_at, img.folder));
+      all.disabled = !Number.isFinite(img.captured_at);
+      card.append(preview, info, actions);
+      return card;
+    }
+
+    function announce(message, error = false) {
+      const target = document.getElementById('appFeedback');
+      target.hidden = false;
+      target.setAttribute('role', error ? 'alert' : 'status');
+      target.textContent = message;
+    }
+
+    function openJournalSearch() {
+      const input = document.getElementById('imageSearchInput');
+      document.querySelector('.events-section').scrollIntoView({block: 'center'});
+      if (getComputedStyle(input).display !== 'none') input.focus();
+      else {
+        document.getElementById('searchAvailability').hidden = false;
+        document.getElementById('cameraFilter').focus();
+      }
+    }
+
+    // Central dialog behavior also covers dynamically opened legacy editors.
+    const modalStack = [];
+    const focusable = modal => [...modal.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]')]
+      .filter(el => !el.disabled && el.getClientRects().length);
+    document.querySelectorAll('.modal').forEach((modal, index) => {
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      modal.tabIndex = -1;
+      const heading = modal.querySelector('h2, h3');
+      if (heading) { heading.id ||= `dialog-heading-${index}`; modal.setAttribute('aria-labelledby', heading.id); }
+      else modal.setAttribute('aria-label', 'Image preview');
+      modal.querySelectorAll('span.close, span.close-preview').forEach(span => {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = span.className;
+        button.setAttribute('aria-label', 'Close dialog');
+        button.textContent = '×';
+        button.onclick = span.onclick;
+        span.replaceWith(button);
+      });
+      let wasOpen = false, previousFocus;
+      new MutationObserver(() => {
+        const open = getComputedStyle(modal).display !== 'none';
+        if (open === wasOpen) return;
+        wasOpen = open;
+        if (open) {
+          previousFocus = document.activeElement;
+          modalStack.push(modal);
+          (focusable(modal)[0] || modal).focus();
+        } else {
+          const position = modalStack.indexOf(modal);
+          if (position !== -1) modalStack.splice(position, 1);
+          if (previousFocus?.isConnected) previousFocus.focus();
+        }
+      }).observe(modal, {attributes: true, attributeFilter: ['style', 'class']});
+    });
+    document.addEventListener('keydown', event => {
+      const modal = modalStack.at(-1);
+      if (!modal) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        const close = modal.querySelector('.close, .close-preview');
+        if (close) close.click();
+        else modal.style.display = 'none';
+      }
+      if (event.key === 'Tab') {
+        const controls = focusable(modal), first = controls[0], last = controls.at(-1);
+        if (!first) { event.preventDefault(); modal.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    });
+    document.getElementById('imageSearchInput').setAttribute('aria-label', 'Search observations by text');
+
+    function updateReviewDate() {
+      const select = document.getElementById('eventDateFilter');
+      document.getElementById('reviewState').textContent = select.selectedOptions[0]?.textContent || 'No date selected';
+    }
+    document.getElementById('eventDateFilter').addEventListener('change', updateReviewDate);
+    async function refreshEngineStatus() {
+      try {
+        const response = await fetch('/engine_status');
+        if (!response.ok) throw new Error();
+        const {cameras} = await response.json();
+        const entries = Object.entries(cameras);
+        const labels = {recorder_offline: 'Live connection unavailable — retrying', no_frames: 'No frames reaching detection', no_active_rules: 'No active detection rules', inference_pending: 'Waiting for detection', detecting: 'Detection running', error: 'Detection error', connecting: 'Connecting'};
+        // Quiet-by-design states (no rules yet, warming up) are not failures.
+        const healthy = ['detecting', 'no_active_rules', 'inference_pending', 'connecting'];
+        const summary = !entries.length ? 'No cameras connected'
+          : entries.every(([,s]) => s.state === 'detecting') ? 'Detection running'
+          : entries.every(([,s]) => healthy.includes(s.state)) ? (entries.some(([,s]) => s.state === 'no_active_rules') ? 'No alert rules set' : 'Detection starting')
+          : 'Detection needs attention';
+        document.getElementById('engineState').textContent = summary;
+        document.getElementById('pipelineDetail').textContent = entries.map(([name,s]) => `${name}: ${labels[s.state] || 'Checking'}.`).join(' ');
+        const rules = entries.reduce((total,[,s]) => total + s.notification_rules, 0);
+        document.getElementById('notificationState').textContent = `${rules} active notification ${rules === 1 ? 'rule' : 'rules'}`;
+      } catch (_) {
+        document.getElementById('engineState').textContent = 'Engine status unavailable';
+        document.getElementById('pipelineDetail').textContent = 'Cannot check detection. Check that the local engine is running.';
+        document.getElementById('notificationState').textContent = 'Unknown';
+      }
+      updateReviewDate();
+    }
+    function pollVisible(task, delay) {
+      let busy = false;
+      const run = async () => {
+        if (document.hidden || busy) return;
+        busy = true;
+        try { await task(); } finally { busy = false; }
+      };
+      setInterval(run, delay);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) run(); });
+    }
     fetchCameras();
-    setInterval(fetchCameras, 5000);
+    pollVisible(fetchCameras, 5000);
+    refreshEngineStatus();
+    pollVisible(refreshEngineStatus, 10000);
+    let enrollImageUrl = null;
+    function openEnrollModal(imageUrl) {
+      enrollImageUrl = imageUrl;
+      const preview = document.getElementById('enrollPreview');
+      preview.src = imageUrl; preview.hidden = false;
+      document.getElementById('enrollFeedback').textContent = '';
+      document.getElementById('enrollNameInput').value = '';
+      document.getElementById('enrollModal').style.display = 'flex';
+      document.getElementById('enrollNameInput').focus();
+    }
+    function closeEnrollModal() {
+      document.getElementById('enrollModal').style.display = 'none';
+      enrollImageUrl = null;
+    }
+    async function submitEnrollment(event) {
+      event.preventDefault();
+      const name = document.getElementById('enrollNameInput').value.trim();
+      const feedback = document.getElementById('enrollFeedback');
+      if (!name || !enrollImageUrl) return;
+      const button = document.querySelector('#enrollForm button[type=submit]');
+      button.disabled = true; button.textContent = 'Learning face…';
+      feedback.textContent = '';
+      try {
+        const query = new URLSearchParams({name, image: new URL(enrollImageUrl, location.origin).pathname});
+        const response = await fetch('/household_enroll?' + query);
+        if (!response.ok) throw new Error((await response.text()).replace(/<[^>]*>/g, ' ').match(/Message: ([^.]*)/)?.[1] || 'Enrollment failed');
+        closeEnrollModal();
+        announce(`${name} added to your household.`);
+        loadHousehold();
+        loadEventImages();
+      } catch (error) {
+        feedback.textContent = error.message || 'Enrollment failed. Try a clearer image of their face.';
+      } finally {
+        button.disabled = false; button.textContent = 'Save person';
+      }
+    }
+    async function loadHousehold() {
+      const list = document.getElementById('householdList');
+      try {
+        const response = await fetch('/household');
+        if (!response.ok) throw new Error();
+        const members = await response.json();
+        list.innerHTML = '';
+        if (!members.length) {
+          const empty = document.createElement('li'); empty.className = 'household-empty';
+          empty.textContent = 'No one enrolled yet. Use the person button on a journal event.';
+          list.append(empty);
+          return;
+        }
+        for (const member of members) {
+          const item = document.createElement('li');
+          const label = document.createElement('span');
+          label.append(member.name, ' ');
+          const samples = document.createElement('small');
+          samples.textContent = `${member.samples} face ${member.samples === 1 ? 'sample' : 'samples'}`;
+          label.append(samples);
+          const remove = document.createElement('button');
+          remove.type = 'button'; remove.className = 'household-remove';
+          remove.setAttribute('aria-label', `Remove ${member.name} from household`);
+          remove.innerHTML = '<svg aria-hidden="true"><use href="#icon-bin"></use></svg>';
+          remove.addEventListener('click', async () => {
+            if (!confirm(`Forget ${member.name}'s enrolled face samples? Past journal labels stay.`)) return;
+            const response = await fetch('/household_delete?id=' + encodeURIComponent(member.id));
+            if (response.ok) { announce(`${member.name} removed.`); loadHousehold(); }
+            else announce('Could not remove that person.', true);
+          });
+          item.append(label, remove);
+          list.append(item);
+        }
+      } catch (_) {
+        list.innerHTML = '';
+        const failed = document.createElement('li'); failed.className = 'household-empty';
+        failed.textContent = 'Household list unavailable.';
+        list.append(failed);
+      }
+    }
+    loadHousehold();
+
+    async function refreshLocalAIStatus() {
+      const target = document.getElementById('localAIState');
+      try {
+        const response = await fetch('/local_ai_status');
+        if (!response.ok) throw new Error('AI status unavailable');
+        const state = await response.json();
+        window.localAIEnabled = !!state.enabled && state.state !== 'disabled';
+        const labels = {disabled: 'Off', waiting_for_event: 'Waiting for an event', loading_model: 'Loading local model', describing: 'Describing an event', ready: 'Ready on this Mac', error: 'Unavailable — check settings'};
+        target.textContent = labels[state.state] || 'Checking…';
+        target.title = state.error || state.model;
+      } catch (_) {
+        target.textContent = 'Engine unavailable';
+      }
+    }
+    refreshLocalAIStatus();
+    pollVisible(refreshLocalAIStatus, 10000);
   </script>
 </body>
 </html>

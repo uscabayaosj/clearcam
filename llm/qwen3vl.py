@@ -3,7 +3,8 @@ import numpy as np
 from tinygrad import Tensor, nn, TinyJit, Variable, dtypes
 Tensor.manual_seed(42)
 from tinygrad.nn.state import safe_load, load_state_dict
-from tinygrad.helpers import partition, fetch
+from tinygrad.helpers import partition
+from utils.runtime_paths import model_asset as fetch
 from utils.gguf import gguf_load
 from utils.model import Transformer
 
@@ -93,7 +94,7 @@ class Qwen3VL():
   def __init__(self, size="2B", res=(640, 640)): # (height, width) res
     self.res = res
     self.max_context = 2000
-    self.lang, kv = Transformer.from_gguf(fetch(f"https://huggingface.co/Qwen/Qwen3-VL-{size}-Instruct-GGUF/resolve/main/Qwen3VL-{size}-Instruct-F16.gguf"), self.max_context) # max context
+    self.lang, kv = Transformer.from_gguf(fetch(f"https://huggingface.co/Qwen/Qwen3-VL-{size}-Instruct-GGUF/resolve/main/Qwen3VL-{size}-Instruct-Q4_K_M.gguf"), self.max_context)
     self.tok = SimpleTokenizer.from_gguf_kv(kv)
     self.vis = Qwen3VLVis(size=size, res=res, tok=self.tok)
     self.start_pos = 0
@@ -105,7 +106,7 @@ class Qwen3VL():
       self.lang.prefill_jit(tokens=Tensor([[42]*self.max_context]).clone()[:, :Variable("len",1,self.max_context).bind(42)], \
       start_pos=Variable("pos",1,self.max_context).bind(42), temperature=Tensor(TEMP).clone())
 
-  def generate(self, prompt=None, image=None, reset=False):
+  def generate(self, prompt=None, image=None, reset=False, max_tokens=96, quiet=False):
     if reset: self.start_pos = 0
     if image is not None:
       self.vis(lang=self.lang, image=image, start_pos=Variable("pos",0,self.max_context).bind(self.start_pos))
@@ -121,7 +122,7 @@ class Qwen3VL():
     toks_out = []
     decoded = ""
 
-    while True and self.start_pos < self.max_context:
+    while len(toks_out) < max_tokens and self.start_pos < self.max_context:
       ts = time.time()
       if toks_out:
         token = self.lang(tokens=next_token_tensor.clone(), start_pos=Variable("pos",1,self.max_context).bind(self.start_pos), temperature=Tensor(TEMP).clone())[0]
@@ -133,9 +134,10 @@ class Qwen3VL():
       new_text = self.tok.decode([next_token])
       decoded += new_text
       tok_s = f" ({1/(time.time()-ts):.1f} tok/s)"
-      print(new_text + tok_s, end="", flush=True)
-      print("\b" * len(tok_s), end="", flush=True)
-    print("\n")
+      if not quiet:
+        print(new_text + tok_s, end="", flush=True)
+        print("\b" * len(tok_s), end="", flush=True)
+    if not quiet: print("\n")
     return self.tok.decode(toks_out)
   
 #https://github.com/huggingface/transformers/blob/1316cd76c0ce328228e08d55dc257484961b074c/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L129

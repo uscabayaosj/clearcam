@@ -1,7 +1,25 @@
 from tinygrad.tensor import Tensor
-from tinygrad.helpers import fetch
+from utils.runtime_paths import model_asset as fetch
+from utils import native_session
 from detection.yolov9 import YOLOv9
-from llm.qwen3vl import Qwen3VL
+from detection import coreml_yolo
+
+
+def make_detector(model_size, model_res):
+  """Prefer the Core ML model on the Neural Engine; fall back to tinygrad YOLO."""
+  if os.environ.get('CLEARCAM_NO_COREML') != '1':
+    for candidate in (os.environ.get('CLEARCAM_MODEL_DIR'), 'models'):
+      if not candidate: continue
+      package = Path(candidate) / coreml_yolo.MODEL_FILE
+      if package.exists():
+        try:
+          detector = coreml_yolo.CoreMLYolo(package)
+          print('Detection: Core ML (Neural Engine),', coreml_yolo.MODEL_FILE)
+          return detector
+        except Exception as error:
+          print('Core ML unavailable, using tinygrad YOLO:', error)
+  print('Detection: tinygrad YOLO', model_size)
+  return YOLOv9(model_size, model_res)
 import numpy as np
 from pathlib import Path
 import cv2
@@ -22,11 +40,18 @@ import struct
 from urllib.parse import unquote, quote
 import zlib
 from utils.db import db
+from utils import keychain
+from utils import household
+from utils import macos_notifications
+from utils.local_descriptions import LocalDescriptions, read_description
 import multiprocessing
 import re
 import base64
 from utils.helpers import send_notif, find_ffmpeg, export_clip, upload_file, encrypt_file, export_and_upload, jit_infer
 import pickle
+import signal
+import math
+from utils.recording_timeline import contained_path, read_timeline, event_timing, write_event_time, expired_recording_dirs, position_at, live_playlist
 
 # RTSP URL
 # Video capture thread
@@ -43,6 +68,75 @@ from ocsort_tracker import ocsort
 
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
+local_descriptions = LocalDescriptions()
+household_store = household.HouseholdStore(BASE_DIR)
+
+
+def _face_regions(frame):
+  """BlazeFace is a close-range detector: distant faces on a wide camera frame
+  need zoomed regions. Full frame first, then an overlapping half-size grid."""
+  yield frame
+  h, w = frame.shape[:2]
+  if min(h, w) < 220: return
+  half_h, half_w = h // 2, w // 2
+  for top in (0, h // 4, h - half_h):
+    for left in (0, w // 4, w - half_w):
+      yield frame[top:top + half_h, left:left + half_w]
+
+
+def face_embedding(frame_bgr):
+  """Embedding for the first detectable face in a frame, or None. Main loop only."""
+  object_finder.init_face()
+  for region in _face_regions(frame_bgr):
+    face = object_finder.img_to_face(region)
+    if face is not None:
+      return object_finder.adaface(Tensor(face).contiguous()).numpy().flatten().tolist()
+  return None
+
+
+def recognize_household(image_path, frame_bgr):
+  """Match the event frame against enrolled members; recognition never blocks recording."""
+  if not household_store.has_members(): return None
+  try:
+    embedding = face_embedding(frame_bgr)
+    match = household_store.match(embedding) if embedding else None
+    household.write_people(image_path, [match['name']] if match else [])
+    return match
+  except Exception as error:
+    print('Household recognition failed:', error)
+    return None
+
+
+def enroll_household_face(name, image_path):
+  """Enroll one face from a saved event image. Runs on the main loop via the
+  task queue, so it must never raise — an exception here would stop recording."""
+  try:
+    frame = cv2.imread(str(image_path))
+    if frame is None: return dict(error='Could not read that image')
+    embedding = face_embedding(frame)
+    if embedding is None: return dict(error='No face was found in that image')
+    member_id = household_store.add_sample(name, embedding)
+    match = household_store.match(embedding)
+    household.write_people(image_path, [match['name']] if match else [])
+    return dict(id=member_id)
+  except Exception as error:
+    print('Household enrollment failed:', error)
+    return dict(error='Enrollment failed — see the engine log')
+
+def camera_sources():
+  """Return usable sources, migrating legacy plaintext RTSP URLs into Keychain."""
+  stored = database.run_get("links", None)
+  sources = {}
+  for camera_name, value in stored.items():
+    if not isinstance(value, str) or not value.strip():
+      continue
+    if keychain.is_reference(value):
+      sources[camera_name] = keychain.retrieve(camera_name, value)
+    else:
+      sources[camera_name] = value
+      if value.startswith("rtsp://"):
+        database.run_put("links", camera_name, keychain.store(camera_name, value))
+  return sources
 
 class RollingClassCounter:
   def __init__(self, window_seconds=None, max=None, classes=None, sched=[[0,86399],True,True,True,True,True,True,True],cam_name=None, desc=None, threshold=0.28):
@@ -93,12 +187,15 @@ class RollingClassCounter:
     return counts, max_reached
   
   def is_active(self, offset=0):
-    if not alerts_on[self.cam_name]: return False
+    # .get: an alert row can exist before init_cam registers the camera (hot-add race).
+    if not alerts_on.get(self.cam_name, True): return False
     if not getattr(self, "is_on", False): return False
     if not self.sched: return True
+    # A malformed stored schedule must never disable detection for the camera.
+    if len(self.sched) < 8 or not isinstance(self.sched[0], (list, tuple)) or len(self.sched[0]) < 2: return True
     now = time.localtime()
     time_of_day = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
-    if not self.sched[time.localtime().tm_wday + 1]: return False
+    if not self.sched[now.tm_wday + 1]: return False
     window = self.window if self.window else (60 if self.is_notif else 1)
     return time_of_day < self.sched[0][1] and time_of_day > ((self.sched[0][0] - window) + offset)
 
@@ -140,7 +237,7 @@ def draw_rectangle_numpy(img, pt1, pt2, color, thickness=1):
     return img
 
 
-def is_vod(cam_name): return Path("data/cameras", cam_name, "streams", "video").is_dir()
+def is_vod(cam_name): return (BASE_DIR / "cameras" / cam_name / "streams" / "video").is_dir()
 
 def _get_stream_resolution(src):
   ffmpeg_path = find_ffmpeg()
@@ -164,6 +261,8 @@ def _get_stream_resolution(src):
 
 class VideoCapture:
   def __init__(self):
+    self.stopping = threading.Event()
+    self.restart_lock = threading.RLock()
     self.output_dir_raw = {}
     self.frame_num = {}
     self.last_frame_num = {}
@@ -201,11 +300,13 @@ class VideoCapture:
     self.alert_counters = {}
     self.live_link = {}
     self.live_link_lock = {}
+    self.pipeline = {}
 
     #self.last_shapes_time = time.time()
     #self.det_shapes = []
 
   def init_cam(self, cam_name, src):
+    self.pipeline[cam_name] = {"last_frame": None, "last_inference": None, "last_event": None, "state": "connecting", "error": None}
     self.counter[cam_name] = RollingClassCounter(cam_name=cam_name, window_seconds=float('inf'))
     self.src[cam_name] = src # todo
     self.last_frames[cam_name] = deque(maxlen=2)
@@ -225,9 +326,6 @@ class VideoCapture:
     self.alert_counters[cam_name] = database.run_get("alerts",cam_name)
     if not self.alert_counters[cam_name]:
       self.alert_counters[cam_name] = dict()
-      id, alert_counter = str(uuid.uuid4()), RollingClassCounter(window_seconds=None, max=1, classes={0,1,2,3,5,7},cam_name=cam_name)
-      self.alert_counters[cam_name][id] = alert_counter
-      database.run_put("alerts", cam_name, alert_counter, id=id)
 
     self.last_det[cam_name] = -1
     self.last_live_check[cam_name] = time.time()
@@ -246,18 +344,22 @@ class VideoCapture:
 
   def start(self):
     cam_check = time.time()
-    cams = database.run_get("links", None)
+    # A stale or partially-created camera row must not be treated as a feed.
+    # This is especially important on first launch, when an empty value can be
+    # present in the local cache before the user has completed camera setup.
+    cams = camera_sources()
     for cam_name in cams.keys():
-      print("starting",cam_name,"src:",cams[cam_name])
+      print("Starting camera:", cam_name)
       self.init_cam(cam_name=cam_name, src=cams[cam_name])
       threading.Thread(target=self.frame_loop, args=(cam_name,), daemon=True).start() # todo non vod only!
     while True:
       if time.time() - cam_check >= 5:
         cam_check = time.time()
-        new_cams = database.run_get("links", None)
+        new_cams = camera_sources()
         for cam_name in new_cams.keys():
           if type(new_cams[cam_name]) != str: continue # todo find cause
           if cam_name not in cams:
+            print("Starting camera:", cam_name)
             self.init_cam(cam_name=cam_name, src=new_cams[cam_name])
             if not self.vod[cam_name]: threading.Thread(target=self.frame_loop, args=(cam_name,), daemon=True).start() # todo non vod only
           else:
@@ -277,6 +379,7 @@ class VideoCapture:
           process_latest_face(img)
         except Exception as e: print("error in object processing", object_queue[0], e)
         del object_queue[0] 
+      time.sleep(0.01)  # Yield while waiting for new frames; don't spin a CPU core.
            
 
 
@@ -298,6 +401,13 @@ class VideoCapture:
         pass
 
   def _open_ffmpeg(self, cam_name):
+    with self.restart_lock:
+      if self.stopping.is_set(): return self.hls_proc.get(cam_name), self.proc.get(cam_name)
+      result = self._open_ffmpeg_locked(cam_name)
+      if result is not None: self.hls_proc[cam_name], self.proc[cam_name] = result
+      return result
+
+  def _open_ffmpeg_locked(self, cam_name):
     path = self._get_new_stream_dir(cam_name)
     if cam_name in self.proc: self._safe_kill_process(self.proc[cam_name])
     if cam_name in self.hls_proc: self._safe_kill_process(self.hls_proc[cam_name])
@@ -328,6 +438,7 @@ class VideoCapture:
       # Original live stream pipeline
       command = [
           ffmpeg_path,
+          "-loglevel", "error",
           *(["-rtsp_transport", "tcp"] if is_rtsp else []),
           "-fflags", "+genpts",
           "-avoid_negative_ts", "make_zero",
@@ -338,11 +449,13 @@ class VideoCapture:
           "-hls_time", "2",
           "-hls_list_size", "0",
           "-hls_playlist_type", "event",
-          "-hls_flags", "append_list+independent_segments+temp_file",
-          "-hls_segment_filename", str(path / "stream_%06d.ts"),
+          "-hls_flags", "append_list+independent_segments+temp_file+program_date_time",
+          "-hls_segment_filename", str(path / f"stream_{uuid.uuid4().hex}_%06d.ts"),
           str(path / "stream.m3u8")
       ]
-      hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      # Inherit stderr so camera connection failures reach the engine log.
+      hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+      self.hls_proc[cam_name] = hls_proc
       time.sleep(15)
       if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
       
@@ -350,21 +463,12 @@ class VideoCapture:
           ffmpeg_path,
           "-live_start_index", "-1",
           "-i", str(path / "stream.m3u8"),
-          "-loglevel", "quiet",
-          "-reconnect", "1",
-          "-reconnect_streamed", "1",
-          "-reconnect_delay_max", "2",
+          "-loglevel", "error",
           "-an",
           "-f", "rawvideo",
           "-pix_fmt", "bgr24",
           "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",
-          "-timeout", "5000000",
-          "-rw_timeout", "15000000",
-          "-vsync", "2",
-          "-fflags", "+discardcorrupt+fastseek+flush_packets+nobuffer",
-          "-avioflags", "direct",
-          "-flags", "low_delay",
-          "-max_delay", "100000",
+          "-fps_mode", "vfr",
           "-threads", "1",
           "-"
       ]
@@ -401,20 +505,26 @@ class VideoCapture:
   def frame_loop(self, cam_name):
     fail_count = 0
     frame_size = self.width[cam_name] * self.height[cam_name] * 3
-    while (BASE_DIR / "cameras" / cam_name).exists():
+    while not self.stopping.is_set() and (BASE_DIR / "cameras" / cam_name).exists():
       try:
+        if self.hls_proc[cam_name].poll() is not None:
+          self.pipeline[cam_name].update(state="recorder_offline", last_frame=None)
+          self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
+          continue
         raw_bytes = self.proc[cam_name].stdout.read(frame_size)
         if len(raw_bytes) != frame_size:
           fail_count += 1
           if fail_count > 5:
-            print(f"{cam_name} FFmpeg frame read failed (count={fail_count}), restarting stream...{self.src[cam_name]}")
+            print(f"{cam_name} FFmpeg frame read failed (count={fail_count}), restarting stream")
             self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
             fail_count = 0
           time.sleep(0.5)
+          continue  # Never reshape a partial/empty read into an image.
         else:
           fail_count = 0
         self.raw_frame[cam_name] = np.frombuffer(raw_bytes, np.uint8).reshape((self.height[cam_name], self.width[cam_name], 3))
         self.frame_num[cam_name] += 1
+        self.pipeline[cam_name]["last_frame"] = time.time()
         time.sleep(1 / 100)
       except Exception as e:
         print("Error in frame_loop:", e, cam_name)
@@ -441,15 +551,29 @@ class VideoCapture:
         last_frame_num = self.last_frame_num[cam_name]
         if self.raw_frame[cam_name] is None: return
         frame = self.raw_frame[cam_name].copy()
-        if frame_num == last_frame_num: return
+        if frame_num == last_frame_num:
+          # Watchdog: a decoder can stay alive but stop producing frames (its
+          # blocking read never returns a short read). Kill it so frame_loop's
+          # EOF triggers the normal stream restart.
+          stale_since = self.pipeline[cam_name].get('last_frame')
+          decoder = self.proc.get(cam_name)
+          last_kick = getattr(self, 'last_decoder_kick', {}).get(cam_name, 0)
+          if (stale_since and time.time() - stale_since > 30 and time.time() - last_kick > 30
+              and decoder is not None and decoder.poll() is None):
+            print(f"{cam_name} decoder stalled for {int(time.time() - stale_since)}s; restarting stream")
+            if not hasattr(self, 'last_decoder_kick'): self.last_decoder_kick = {}
+            self.last_decoder_kick[cam_name] = time.time()
+            self._safe_kill_process(decoder)
+          return
 
         # don't run inference when no active scheds
         if not any(counter.is_active() for _, counter in self.alert_counters[cam_name].items()): self.last_preds[cam_name] = [] # to remove annotation when no alerts active
         else:
-          if not global_settings.userID or alerts_on[cam_name]:
+          if not global_settings.userID or alerts_on.get(cam_name, True):
             preds, frame = self.run_inference(frame, cam_name=cam_name)
-            self.last_frames[cam_name].append(frame.numpy().copy())
+            self.last_frames[cam_name].append(frame.numpy().copy() if hasattr(frame, 'numpy') else np.array(frame, copy=True))
             self.last_preds[cam_name] = preds.copy()
+            self.pipeline[cam_name].update(last_inference=time.time(), state="detecting", error=None)
             self.last_frame_num[cam_name] = self.frame_num[cam_name]
 
             curr_time = time.time()
@@ -481,26 +605,31 @@ class VideoCapture:
                   annotated_frame = draw_predictions(self.last_frames[cam_name][-1].copy(), filtered_preds, color_dict)
                   # todo alerts can be sent with the wrong thumbnail if two happen quickly, use map
                   ts = int(self.cap[cam_name].get(cv2.CAP_PROP_POS_FRAMES) / self.src_fps[cam_name]) - 5 if self.vod[cam_name] else int(time.time() - self.start_time[cam_name] - 5)
-                  self.filename[cam_name] = filepath / f"{ts}_notif.jpg" if alert.is_notif else filepath / f"{ts}.jpg"
+                  event_id = time.time_ns()
+                  self.filename[cam_name] = filepath / f"{event_id}_notif.jpg" if alert.is_notif else filepath / f"{event_id}.jpg"
                   if not self.vod[cam_name]: cv2.imwrite(str(self.filename[cam_name]), annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]) # we've 10MB limit for video file, raw png is 3MB!
-                  if (plain := filepath / f"{ts}.jpg").exists() and (filepath / f"{ts}_notif.jpg").exists():
-                    plain.unlink() # only one image per event
-                    self.filename[cam_name] = filepath / f"{ts}_notif.jpg"
+                  if not self.vod[cam_name]: write_event_time(self.filename[cam_name], time.time())
+                  recognized = None
+                  if not self.vod[cam_name]:
+                    # Match against enrolled household faces on the un-annotated frame.
+                    recognized = recognize_household(self.filename[cam_name], self.last_frames[cam_name][-1])
                   if global_settings.userID is not None and not self.vod[cam_name] and alert.is_notif:
                     title = f"Event Detected ({cam_name})"
                     threading.Thread(target=send_notif, args=(global_settings.userID,title,None), daemon=True).start()
-                    if global_settings.use_qwen: # extra notif if qwen
-                      # use frames before last, only one reset needed, must convert to RGB
-                      for i in range(len(self.last_frames[cam_name])-1): qwen.generate(image=cv2.cvtColor(self.last_frames[cam_name][i], cv2.COLOR_BGR2RGB), reset=True if i==0 else False)
-                      text = qwen.generate(prompt=qwen_prompt, image=cv2.cvtColor(cv2.imread(self.filename[cam_name]), cv2.COLOR_BGR2RGB), reset=False) # must reset or run out of context
-                      threading.Thread(target=send_notif, args=(global_settings.userID,f"AI Summary ({cam_name}):",text), daemon=True).start()
-                    threading.Thread(target=export_and_upload, kwargs={"cam_name": cam_name, "thumbnail": self.filename[cam_name], "userID": global_settings.userID, "key": global_settings.key, "start": ts, "wait":True}, daemon=True).start()
+                    if global_settings.key:
+                      threading.Thread(target=export_and_upload, kwargs={"cam_name": cam_name, "thumbnail": self.filename[cam_name], "userID": global_settings.userID, "key": global_settings.key, "start": ts, "wait":True}, daemon=True).start()
+                  elif not self.vod[cam_name] and alert.is_notif:
+                    title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
+                    threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
+                  if not self.vod[cam_name] and global_settings.use_qwen:
+                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif)
                   self.last_det[cam_name] = time.time()
+                  self.pipeline[cam_name]["last_event"] = time.time()
                   alert.last_det = time.time()
           
           if (time.time() - self.last_live_check[cam_name]) >= 5:
             self.last_live_check[cam_name] = time.time()
-            link = database.run_get("links", cam_name)
+            link = camera_sources().get(cam_name)
             if type(link) == list: link = link[0] # todo, flakey?
             if link != self.src[cam_name]:
               self.src[cam_name] = link
@@ -542,6 +671,7 @@ class VideoCapture:
 
     except Exception as e:
       print("Error in process_frame:", e, cam_name)
+      self.pipeline[cam_name].update(state="error", error=type(e).__name__)
       time.sleep(1)
 
   def upload_live_segment(self, link, cam_name):
@@ -578,8 +708,11 @@ class VideoCapture:
 
   def run_inference(self, frame, cam_name):
     global model
-    frame = Tensor(frame)
-    preds = jit_infer(model, frame, yolo_jit_cache).numpy()
+    if getattr(model, 'kind', None) == 'coreml':
+      preds = model(frame)  # numpy in, numpy out; runs on the Neural Engine
+    else:
+      frame = Tensor(frame)
+      preds = jit_infer(model, frame, yolo_jit_cache).numpy()
     thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.5) or 0.5 #todo clean!
     online_targets = self.tracker[cam_name].update(preds, thresh)
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
@@ -677,6 +810,13 @@ def run_clip(clip, im, top_k, cam_name, selected_dir, is_face):
   return res
 
 class HLSRequestHandler(BaseHTTPRequestHandler):
+    def parse_request(self):
+        if not super().parse_request(): return False
+        if not native_session.authorized(self.headers, self.server.server_port):
+            self.send_error(403, 'This engine belongs to the ClearCam app')
+            return False
+        return True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -692,14 +832,18 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         cam_index = parts.index("cameras") + 1
         cam = parts[cam_index]
         rel = img_path.relative_to(BASE_DIR / "cameras")
-        image_url = f"/{rel}"
+        image_url = '/' + quote(str(rel), safe='/')
+        timing = event_timing(img_path)
         image_data.append({
           "url": image_url,
-          "timestamp": ts,
+          "timestamp": timing['playback_offset'],
           "filename": img_path.name,
           "cam_name": cam,
           "folder": img_path.parts[-2],
           "score": score,
+          "description": read_description(img_path),
+          "people": household.read_people(img_path),
+          **timing,
         })
       image_data = image_data[start:start+count]
       response_data = {
@@ -720,12 +864,42 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         return BASE_DIR / "cameras"
     
     def do_GET(self):
-        parsed_path = urlparse(unquote(self.path))
+        parsed_path = urlparse(self.path)
+        parsed_path = parsed_path._replace(path=unquote(parsed_path.path))
         query = parse_qs(parsed_path.query)
+        if parsed_path.path == '/native_notifications':
+          self.send_200({'notifications': native_session.take_notifications()})
+          return
         cam_name = query.get("cam", [None])[0]
+        for key in ('cam', 'cam_name'):
+          name = query.get(key, [None])[0]
+          if name is not None:
+            try:
+              if not name.strip() or name in ('.', '..') or any(c in name for c in '/\\\x00'): raise ValueError()
+              contained_path(BASE_DIR / 'cameras', name)
+            except ValueError:
+              self.send_error(400, 'Invalid camera name')
+              return
+
+        if parsed_path.path == '/replay_position':
+          try:
+            folder = query.get('folder', [''])[0]
+            datetime.strptime(folder, '%Y-%m-%d')
+            at = float(query.get('at', [''])[0])
+            if not cam_name or not math.isfinite(at): raise ValueError()
+            playlist = contained_path(BASE_DIR / 'cameras', cam_name + '/streams/' + folder + '/stream.m3u8')
+            self.send_200({'playback_offset': position_at(read_timeline(playlist), at)})
+          except ValueError:
+            self.send_error(400, 'Invalid replay request')
+          return
 
         if parsed_path.path == "/set_max_storage":
-          max_gb = float(query.get("max", [None])[0])
+          try:
+            max_gb = float(query.get("max", [None])[0])
+            if not math.isfinite(max_gb) or max_gb < 1: raise ValueError()
+          except (ValueError, TypeError):
+            self.send_error(400, "Storage limit must be at least 1 GB")
+            return
           self.server.max_gb = max_gb
           database.run_put("max_storage", "all", max_gb)
           self.send_200()
@@ -734,19 +908,52 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         if parsed_path.path == "/get_global_settings":
           self.send_200(secret_settings(global_settings).__dict__)
           return
+        if parsed_path.path == "/local_ai_status":
+          self.send_200(local_descriptions.status())
+          return
         if parsed_path.path == "/get_max_storage":
-          self.send_200(body={"max_gb":self.server.max_gb})
+          self.send_200(body={"max_gb":self.server.max_gb, "warning":getattr(self.server, 'storage_warning', None)})
           return
 
         if parsed_path.path == "/list_cameras":
-          cams = database.run_get("links", None)
+          cams = {name: value for name, value in database.run_get("links", None).items() if isinstance(value, str) and value.strip()}
           progs = database.run_get("analysis_prog", None)
           cam_progress = {cam_name: progs.get(cam_name, None) for cam_name in cams}
           self.send_200(cam_progress)
           return
 
+        if parsed_path.path == "/engine_status":
+          states = {}
+          now = time.time()
+          for name, snapshot in list(cam.pipeline.items()):
+            state = dict(snapshot)
+            counters = list(cam.alert_counters.get(name, {}).values())
+            state["active_rules"] = sum(bool(rule.is_active()) for rule in counters)
+            state["notification_rules"] = sum(bool(rule.is_active() and rule.is_notif) for rule in counters)
+            state["frames"] = cam.frame_num.get(name, -1) + 1
+            state["decoder_running"] = bool(cam.proc.get(name) and cam.proc[name].poll() is None)
+            state["recorder_running"] = bool(cam.hls_proc.get(name) and cam.hls_proc[name].poll() is None)
+            if not state["recorder_running"]: state["state"] = "recorder_offline"
+            elif not state["last_frame"] or now - state["last_frame"] > 20: state["state"] = "no_frames"
+            elif not state["active_rules"]: state["state"] = "no_active_rules"
+            elif not state["last_inference"] or now - state["last_inference"] > 30: state["state"] = "inference_pending"
+            states[name] = state
+          self.send_200({"cameras": states})
+          return
+
+        if parsed_path.path == "/vendor/hls.min.js":
+          asset = Path(__file__).parent / "vendor" / "hls.min.js"
+          if not asset.is_file():
+            self.send_error(503, "Local video player is missing")
+            return
+          self.send_response(200)
+          self.send_header("Content-Type", "application/javascript")
+          self.end_headers()
+          self.wfile.write(asset.read_bytes())
+          return
+
         if parsed_path.path == "/list_days":          
-          base_path = "data/cameras"
+          base_path = BASE_DIR / "cameras"
           days = set()
           date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
           if os.path.exists(base_path):
@@ -767,8 +974,11 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             if not cam_name or not src:
                 self.send_error(400, "Missing cam_name or src")
                 return
+            if len(cam_name) > 100 or cam_name in (".", "..") or any(c in cam_name for c in ('/', '\\', '\x00')):
+                self.send_error(400, "Camera name must be a single name of up to 100 characters")
+                return
             
-            database.run_put("links", cam_name, src)
+            database.run_put("links", cam_name, keychain.store(cam_name, src))
             self.send_response(302)
             self.send_header('Location', '/')
             self.end_headers()
@@ -792,7 +1002,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             zone["outside"] = (str(outside).lower() == "true") if (outside := query.get("outside", [None])[0]) is not None else zone.get("outside")
             query.get("threshold", [None])[0] is not None and zone.update({"threshold": float(query.get("threshold", [None])[0])}) #need the val  
             database.run_put("settings", cam_name, zone) # todo, key for each
-            if (url := query.get("url")) is not None: database.run_put("links", cam_name, url[0])
+            if (url := query.get("url")) is not None: database.run_put("links", cam_name, keychain.store(cam_name, url[0]))
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -818,7 +1028,8 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 window = query.get("window", [None])[0]
                 max_count = query.get("max", [None])[0]
                 class_ids = query.get("class_ids", [None])[0]
-                sched = json.loads(query.get("sched", ["[[0,86400],[0,86400],[0,86400],[0,86400],[0,86400],[0,86400],[0,86400]]"])[0]) # todo, weekly
+                # Canonical schedule shape: [[start,end], mon..sun booleans].
+                sched = json.loads(query.get("sched", ["[[0,86399],true,true,true,true,true,true,true]"])[0])
                 if window: window = int(window)
                 max_count = int(max_count)
                 classes = [int(c.strip()) for c in class_ids.split(",")]
@@ -896,6 +1107,43 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_200(alert_info)
             return
 
+        if parsed_path.path == '/household':
+            self.send_200(household_store.list_members())
+            return
+
+        if parsed_path.path == '/household_delete':
+            member_id = query.get('id', [None])[0]
+            try:
+                removed = household_store.remove(member_id)
+            except ValueError:
+                self.send_error(400, 'Invalid member id')
+                return
+            if not removed:
+                self.send_error(404, 'No such household member')
+                return
+            self.send_200({'status': 'deleted'})
+            return
+
+        if parsed_path.path == '/household_enroll':
+            name = query.get('name', [None])[0]
+            image = query.get('image', [None])[0]
+            if not name or not image:
+                self.send_error(400, 'Missing name or image')
+                return
+            try:
+                image_path = contained_path(BASE_DIR / 'cameras', image.removeprefix('/cameras/').lstrip('/'))
+                if image_path.suffix.lower() not in ('.jpg', '.jpeg', '.png'): raise ValueError()
+                clean = household.clean_name(name)
+            except ValueError as error:
+                self.send_error(400, str(error) or 'Invalid enrollment request')
+                return
+            result = add_to_queue(enroll_household_face, clean, image_path)
+            if result.get('error'):
+                self.send_error(422, result['error'])
+                return
+            self.send_200({'status': 'ok', 'id': result['id']})
+            return
+
         if parsed_path.path == '/delete_camera':
             cam_name = query.get("cam_name", [None])[0]
             if not cam_name:
@@ -910,6 +1158,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               for id, _ in alerts.items():
                 database.run_delete("alerts", cam_name, id=id)
               database.run_delete("links", cam_name)
+              keychain.remove(cam_name)
               database.run_delete("analysis_prog", cam_name)
               database.run_delete("settings", cam_name)
               database.run_delete("counters", cam_name)
@@ -965,6 +1214,13 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           return
                             
         if parsed_path.path == '/' or parsed_path.path == f'/{cam_name}':
+            # The legacy standalone template is not shipped. Use the maintained
+            # main surface rather than returning 200 and crashing mid-response.
+            if not Path('cameraview.html').is_file():
+                self.send_response(302)
+                self.send_header('Location', '/')
+                self.end_headers()
+                return
             selected_dir = parse_qs(parsed_path.query).get("folder", [datetime.now().strftime("%Y-%m-%d")])[0]
             start_param = parse_qs(parsed_path.query).get("start", [None])[0]
             try:
@@ -997,9 +1253,29 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         except Exception:
           pass
 
-        file_path = BASE_DIR / "cameras" / requested_path
+        try:
+            file_path = contained_path(BASE_DIR / "cameras", requested_path)
+        except ValueError:
+            self.send_error(403, "Outside camera storage")
+            return
 
-        if not file_path.exists():
+        if file_path.name == 'live.m3u8':
+            # A wide window keeps a briefly-stalled player inside the playlist
+            # instead of chasing segments that already rolled out.
+            content = live_playlist(file_path.with_name('stream.m3u8'), window=8)
+            if content is None:
+                self.send_error(404)
+                return
+            body = content.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if not file_path.is_file():
             self.send_error(404)
             return
 
@@ -1010,7 +1286,11 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         elif file_path.suffix == '.ts':
             self.send_header('Content-Type', 'video/MP2T')
         elif file_path.suffix == '.png':
+            self.send_header('Content-Type', 'image/png')
+        elif file_path.suffix in ('.jpg', '.jpeg'):
             self.send_header('Content-Type', 'image/jpeg')
+        elif file_path.suffix in ('.mp4', '.m4s'):
+            self.send_header('Content-Type', 'video/mp4')
         self.end_headers()
 
         with open(file_path, 'rb') as f:
@@ -1023,6 +1303,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           content_length = int(self.headers.get('Content-Length', 0))
           body = self.rfile.read(content_length)
           data = json.loads(body.decode('utf-8'))
+          if os.environ.get('CLEARCAM_NATIVE') == '1' and (data.get('use_clip') or data.get('use_face') or data.get('model_size', 't') != 't' or str(data.get('qwen_size', 2)) != '2'):
+            self.send_error(400, 'This alpha includes YOLO tiny and Qwen 2B only')
+            return
           # keep userid and key if "True"
           if data["userID"] == True: data["userID"] = global_settings.userID
           if data["key"] == True: data["key"] = global_settings.key
@@ -1076,8 +1359,17 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             start = data.get("start")
             count = data.get("count")
             is_face = data.get("is_face") or False
-            if is_face and not global_settings.use_face: return
-            if start is None: start, count = 0, 100
+            if is_face and not global_settings.use_face:
+              self.send_error(400, "Face search is disabled")
+              return
+            try:
+              start, count = int(start or 0), int(count if count is not None else 100)
+              if start < 0 or not 1 <= count <= 200: raise ValueError()
+              if cam_name: contained_path(BASE_DIR / "cameras", cam_name)
+              if selected_dir and selected_dir != 'video': datetime.strptime(selected_dir, '%Y-%m-%d')
+            except (ValueError, TypeError):
+              self.send_error(400, "Invalid camera, date or pagination")
+              return
             uploaded_image = data.get("uploaded_image")
             if uploaded_image:
               if ',' in uploaded_image: uploaded_image = uploaded_image.split(',')[1]
@@ -1098,7 +1390,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 for subdir in (camera_dir / "streams").iterdir() 
                 if subdir.is_dir()
               })
-            selected_dirs.append("video")
+            if selected_dir is None and "video" not in selected_dirs: selected_dirs.append("video")
 
             if image_text and global_settings.use_clip: add_to_queue(object_finder._load_all_embeddings)
             if (uploaded_image or similar_img) and (global_settings.use_clip or global_settings.use_face): add_to_queue(object_finder._load_all_embeddings, is_face)
@@ -1123,21 +1415,26 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               for selected_dir in selected_dirs:
                 event_image_path = camera_dir / "event_images" / selected_dir
                 if not event_image_path.exists(): continue
+                timeline = read_timeline(camera_dir / "streams" / selected_dir / "stream.m3u8")
                 event_images = sorted(
                   event_image_path.glob("*.jpg"),
-                  key=lambda p: int(p.stem.split('_')[0]),
+                  key=lambda p: p.stat().st_mtime,
                   reverse=True
                 )
                 for img in event_images:
                   if name_contains and name_contains not in img.name: continue
-                  ts = int(img.stem.split('_')[0])
-                  image_url = f"/{img.relative_to(BASE_DIR)}"
+                  timing = event_timing(img, timeline)
+                  ts = timing['playback_offset']
+                  image_url = '/' + quote(str(img.relative_to(BASE_DIR)), safe='/')
                   image_data.append({
                     "url": image_url,
                     "timestamp": ts,
                     "filename": img.name,
                     "cam_name": camera_dir.name,
                     "folder": selected_dir,
+                    "description": read_description(img),
+                    "people": household.read_people(img),
+                    **timing,
                   })
 
             image_data.sort(key=image_sort_key, reverse=True)
@@ -1155,6 +1452,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             return
 
 def image_sort_key(item):
+  if item.get("captured_at") is not None: return item['captured_at']
   try: return datetime.strptime(item["folder"], "%Y-%m-%d").timestamp() + item["timestamp"]
   except ValueError: return -1
 
@@ -1244,8 +1542,6 @@ def set_settings(x): # todo, save to db, do logic in GlobalSettings class, sanit
   global model
   global yolo_res
   global yolo_jit_cache
-  global qwen
-  global qwen_prompt
   if x.use_clip:
     object_finder.init_clip()
   else:
@@ -1258,20 +1554,12 @@ def set_settings(x): # todo, save to db, do logic in GlobalSettings class, sanit
 
   if x.model_size != global_settings.model_size or x.model_res != global_settings.model_res:
     yolo_jit_cache = {}
-    model = YOLOv9(x.model_size, x.model_res)
+    model = make_detector(x.model_size, x.model_res)
 
-  if x.key == None: # dont use alerts without a key
+  if x.key == None: # cloud notifications require a key; local AI does not
     x.userID = None
-    x.use_qwen = False
 
-  # todo change size mid run doesn't work
-  if (x.use_qwen and qwen is None) or (x.use_qwen and global_settings.qwen_size != x.qwen_size):
-    qwen = None
-    qwen = Qwen3VL(size=f"{x.qwen_size}B", res=(544, 960)) # h, w. they need to be multiples of 32
-    qwen_prompt = "What has been detected on my CCTV camera? Write in one short sentence"
-    print("prewarming Qwen")
-    qwen.prewarm()
-    print("DONE")
+  local_descriptions.configure(x.use_qwen, x.qwen_size)
   global_settings = x
 
 def clip_latest_img(img):
@@ -1316,7 +1604,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
       self.cleanup_thread = None
       max_gb = database.run_get("max_storage", None)
       if max_gb == {}:
-        database.run_put("max_storage", "all", 256)
+        database.run_put("max_storage", "all", 1 if os.environ.get('CLEARCAM_NATIVE') == '1' else 256)
         max_gb = database.run_get("max_storage", None)
       self.max_gb = max_gb["all"]
       self.object_finder_stop_event = threading.Event()
@@ -1342,42 +1630,23 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
       size_gb = total_size / (1000 ** 3)
       free_gb = shutil.disk_usage(BASE_DIR / "cameras").free / (1000 ** 3)
       if size_gb > self.max_gb or free_gb < 5: self._cleanup_oldest_files() # todo unhardcode
+      else: self.storage_warning = None
 
     def _cleanup_oldest_files(self):
-      camera_dirs = []
-      for cam_dir in (BASE_DIR / "cameras").iterdir():
-        if cam_dir.is_dir():
-          dir_size = sum(f.stat().st_size for f in cam_dir.glob('**/*') if f.is_file())
-          camera_dirs.append((cam_dir, dir_size))
-      
-      if not camera_dirs: return
-          
-      largest_cam_raw = max(camera_dirs, key=lambda x: x[1])[0]
-      for largest_cam in [largest_cam_raw]:
-        streams_dir = largest_cam / "streams"
-        if not streams_dir.exists():
-          shutil.rmtree(largest_cam)
-          continue
-            
-        recordings = []
-        for rec_dir in streams_dir.iterdir():
-          if rec_dir.is_dir(): recordings.append((rec_dir, rec_dir.stat().st_ctime))
-        if not recordings:
-          shutil.rmtree(largest_cam)
-          print(f"Deleted camera folder with empty streams: {largest_cam}")
-          continue
-        recordings.sort(key=lambda x: x[1])
-        oldest_recording = recordings[0][0]
-        shutil.rmtree(oldest_recording)
-        event_images_dir = largest_cam.with_name(largest_cam.name) / Path("event_images") / Path(oldest_recording.name)
-        object_images_dir = largest_cam.with_name(largest_cam.name) / Path("objects") / Path(oldest_recording.name)
-        face_images_dir = largest_cam.with_name(largest_cam.name) / Path("faces") / Path(oldest_recording.name)
-        #dets_dir = largest_cam.with_name(largest_cam.name) / Path("dets") / Path(oldest_recording.name)
-        if event_images_dir.exists(): shutil.rmtree(event_images_dir)
-        if object_images_dir.exists(): shutil.rmtree(object_images_dir)
-        if face_images_dir.exists(): shutil.rmtree(face_images_dir)
-        #if dets_dir.exists(): shutil.rmtree(dets_dir)
-        print(f"Deleted oldest recording: {oldest_recording}")
+      candidates = expired_recording_dirs(BASE_DIR / "cameras", datetime.now().strftime("%Y-%m-%d"))
+      if not candidates:
+        self.storage_warning = "Storage limit reached. Today's recording is protected; increase the allowance or archive footage."
+        return
+      oldest_recording = candidates[0]
+      camera_dir = oldest_recording.parent.parent
+      shutil.rmtree(oldest_recording)
+      for category in ("event_images", "objects", "faces"):
+        relative = category + "/" + oldest_recording.name
+        if (camera_dir / relative).is_symlink() or (camera_dir / category).is_symlink(): continue
+        folder = contained_path(camera_dir, relative)
+        if folder.is_dir() and not folder.is_symlink(): shutil.rmtree(folder)
+      self.storage_warning = None
+      print(f"Deleted completed recording day: {oldest_recording}")
 
     def server_close(self):
         if hasattr(self, 'cleanup_stop_event'):
@@ -1418,7 +1687,6 @@ if __name__ == "__main__":
   jit_cache = {}
   yolo_jit_cache = {}
   alerts_on = {}
-  qwen = None
   multiprocessing.set_start_method("spawn", force=True)
   database = db()
   cams = database.run_get("links", None)
@@ -1436,32 +1704,32 @@ if __name__ == "__main__":
 
   global_settings = database.run_get("global_settings", "all")
   if global_settings == {}: # todo, use None?
-    global_settings = GlobalSettings()
+    global_settings = GlobalSettings(use_qwen=os.environ.get('CLEARCAM_NATIVE') == '1')
     database.run_put("global_settings", "all", global_settings)
 
-  model = YOLOv9(global_settings.model_size, res=int(global_settings.model_res))
+  model = make_detector(global_settings.model_size, int(global_settings.model_res))
   object_finder = ObjectFinder()
   cam = VideoCapture()
 
   if global_settings.use_clip: object_finder.init_clip()
   if global_settings.use_face: object_finder.init_face()
 
-  if global_settings.key != None and global_settings.use_qwen:
-    qwen = Qwen3VL(size=f"{global_settings.qwen_size}B", res=(544, 960)) # h, w. they need to be multiples of 32
-    qwen_prompt = "What has been detected on my CCTV camera? Write in one short sentence"
-    print("prewarming Qwen")
-    qwen.prewarm()
-    print("DONE")
-
+  local_descriptions.configure(global_settings.use_qwen, global_settings.qwen_size)
+  local_descriptions.retry_saved(BASE_DIR / "cameras")
 
   try:
-    server = ThreadedHTTPServer(('0.0.0.0', 8080), RequestHandlerClass=HLSRequestHandler)
+    bind_host = os.environ.get("CLEARCAM_BIND_HOST", "127.0.0.1")
+    server = ThreadedHTTPServer((bind_host, int(os.environ.get('CLEARCAM_PORT', '8080'))), RequestHandlerClass=HLSRequestHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Serving at http://{get_lan_ip()}:8080")
+    print(f"Serving at http://{bind_host}:{server.server_port}")
+    if ready_file := os.environ.get('CLEARCAM_READY_FILE'):
+      ready_path = Path(ready_file)
+      temporary = ready_path.with_suffix('.tmp')
+      temporary.write_text(json.dumps({'port': server.server_port, 'pid': os.getpid()}))
+      temporary.replace(ready_path)
   except OSError as e:
     if e.errno == socket.errno.EADDRINUSE:
-      print("Port in use, server not started.")
-      server = None
+      raise SystemExit('ClearCam port is already in use; no camera workers were started.')
     else:
         raise
     
@@ -1471,4 +1739,19 @@ if __name__ == "__main__":
     args=(cam, restart_time),
     daemon=True
   ).start()
-  cam.start()
+  def stop_engine(signum, frame):
+    raise KeyboardInterrupt
+  signal.signal(signal.SIGTERM, stop_engine)
+  try:
+    cam.start()
+  except KeyboardInterrupt:
+    print("Stopping local camera engine")
+  finally:
+    cam.stopping.set()
+    with cam.restart_lock:
+      for name in set(cam.proc) | set(cam.hls_proc):
+        cam._safe_kill_process(cam.proc.get(name))
+        cam._safe_kill_process(cam.hls_proc.get(name))
+    if server:
+      server.shutdown()
+      server.server_close()

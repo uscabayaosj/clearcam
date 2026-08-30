@@ -1,6 +1,6 @@
 from tinygrad import Tensor, nn, TinyJit
 from tinygrad.nn.state import safe_save, safe_load, get_state_dict, load_state_dict
-from tinygrad.helpers import fetch
+from utils.runtime_paths import model_asset as fetch
 class MaxPool2d:
     def __init__(self, kernel_size=2, stride=None, padding=0):
         self.kernel_size = kernel_size

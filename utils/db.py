@@ -3,7 +3,9 @@ from typing import Any
 #from tinygrad.helpers import diskcache_get
 
 _db_tables = set()
-cache_dir: str = "data/"
+from utils.runtime_paths import DATA_DIR
+cache_dir: str = str(DATA_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHEDB = os.path.abspath(os.path.join(cache_dir, "cc_cache.db"))
 _db_connection = None
 VERSION = 1

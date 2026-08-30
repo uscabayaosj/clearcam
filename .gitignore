@@ -1,0 +1,10 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+data/
+dist/
+macos/.build/
+macos/.swiftpm/
+yolo11n.pt
+.codex/

@@ -1,6 +1,6 @@
 import cv2
 from tinygrad import Tensor
-from tinygrad.helpers import fetch
+from utils.runtime_paths import model_asset as fetch
 from tinygrad.dtype import dtypes
 from tinygrad.nn.state import load_state_dict, safe_load
 import tinygrad.nn as nn

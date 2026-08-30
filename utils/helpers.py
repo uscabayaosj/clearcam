@@ -12,7 +12,7 @@ import struct
 from datetime import datetime
 import cv2
 import numpy as np
-BASE_DIR = Path(__file__).parent.parent / "data"
+from utils.runtime_paths import DATA_DIR as BASE_DIR
 from tinygrad import Tensor, TinyJit
 
 def send_notif(session_token: str, text=None, body_text=None):
@@ -191,6 +191,9 @@ def jit_infer(fn, x, jit_cache):
     return jit_cache[shape](x, fn)
 
 def find_ffmpeg():
+    if bundled := os.environ.get('CLEARCAM_FFMPEG'):
+        if not Path(bundled).is_file(): raise RuntimeError('Bundled FFmpeg is missing')
+        return bundled
     ffmpeg_path = shutil.which('ffmpeg')
     if ffmpeg_path:
         return ffmpeg_path
