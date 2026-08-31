@@ -11,6 +11,13 @@ colors:
   sage-strong: "#c2decf"
   brass: "#e7b35d"
   danger: "#e58a84"
+  line-faint: "rgba(232,238,235,0.12)"
+  line-strong: "rgba(232,238,235,0.28)"
+  paper-raised: "#f8fbf9"
+  paper-tint: "#edf3ef"
+  ink-on-paper: "#31413b"
+  muted-on-paper: "#52635d"
+  border-on-paper: "#b4c0ba"
 typography:
   display:
     fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Helvetica Neue, sans-serif"

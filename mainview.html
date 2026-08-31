@@ -19,42 +19,25 @@
       100% { transform: rotate(360deg); }
     }
 
+    /* Legacy aliases: every remaining old-layer rule resolves to the committed
+       household-observatory palette. ClearCam ships one deliberate look; the
+       old auto light/dark block is gone so the two systems can never disagree. */
     :root {
-      --bg-primary: #ffffff;
-      --bg-secondary: #f8f9fa;
-      --bg-tertiary: #f9f9f9;
-      --text-primary: #333333;
-      --text-secondary: #666666;
-      --text-muted: #aaaaaa;
-      --border-color: #cccccc;
-      --border-light: #eeeeee;
-      --accent-primary: #007bff;
-      --accent-hover: #0056b3;
-      --accent-danger: #dc3545;
-      --accent-danger-hover: #c82333;
-      --accent-success: #28a745;
-      --shadow: rgba(0, 0, 0, 0.1);
-      --modal-bg: rgba(0, 0, 0, 0.7);
-    }
-
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg-primary: #1a1a1a;
-        --bg-secondary: #2d2d2d;
-        --bg-tertiary: #252525;
-        --text-primary: #ffffff;
-        --text-secondary: #cccccc;
-        --text-muted: #888888;
-        --border-color: #444444;
-        --border-light: #333333;
-        --accent-primary: #0d6efd;
-        --accent-hover: #0b5ed7;
-        --accent-danger: #dc3545;
-        --accent-danger-hover: #bb2d3b;
-        --accent-success: #198754;
-        --shadow: rgba(0, 0, 0, 0.3);
-        --modal-bg: rgba(0, 0, 0, 0.8);
-      }
+      --bg-primary: var(--ink-raised);
+      --bg-secondary: var(--ink-soft);
+      --bg-tertiary: var(--ink-soft);
+      --text-primary: var(--paper);
+      --text-secondary: var(--paper-muted);
+      --text-muted: var(--paper-muted);
+      --border-color: var(--line-strong);
+      --border-light: var(--line);
+      --accent-primary: var(--ink-soft);
+      --accent-hover: #2b4247;
+      --accent-danger: var(--danger);
+      --accent-danger-hover: #472729;
+      --accent-success: var(--sage);
+      --shadow: rgba(0, 0, 0, 0.25);
+      --modal-bg: rgba(5, 9, 10, 0.78);
     }
 
     body {
@@ -1274,7 +1257,14 @@
       --brass: #e7b35d;
       --danger: #e58a84;
       --line: rgba(232, 238, 235, 0.14);
+      --line-faint: rgba(232, 238, 235, 0.12);
+      --line-strong: rgba(232, 238, 235, 0.28);
       --surface-line: rgba(16, 26, 28, 0.14);
+      --paper-raised: var(--paper-raised);
+      --paper-tint: var(--paper-tint);
+      --ink-on-paper: var(--ink-on-paper);
+      --muted-on-paper: var(--muted-on-paper);
+      --border-on-paper: var(--border-on-paper);
       --shadow-deep: 0 20px 48px rgba(0, 0, 0, 0.28);
     }
 
@@ -1319,7 +1309,7 @@
     .section-heading h2, .events-section h2, .system-ledger h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; font-weight: 650; }
     .section-heading p { margin: 0; color: var(--paper-muted); font-size: .88rem; }
     .camera-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px; padding: 2px 2px 14px; }
-    .camera-empty { flex: 1 0 100%; width: 100%; min-width: 0; max-width: 100%; min-height: 230px; display: grid; place-items: center; padding: 34px; border: 1px dashed rgba(232,238,235,.24); border-radius: 15px; color: var(--paper-muted); text-align: center; overflow: hidden; }
+    .camera-empty { flex: 1 0 100%; width: 100%; min-width: 0; max-width: 100%; min-height: 230px; display: grid; place-items: center; padding: 34px; border: 1px dashed var(--line-strong); border-radius: 15px; color: var(--paper-muted); text-align: center; overflow: hidden; }
     .camera-empty > div { max-width: 31ch; overflow-wrap: anywhere; }
     .camera-empty strong { display: block; color: var(--paper); font-size: 1rem; margin-bottom: 7px; }
     .camera-error span { display: block; }
@@ -1343,27 +1333,27 @@
     .events-section { padding: clamp(18px, 2.4vw, 30px) !important; }
     .journal-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     .journal-heading h2 { font-size: clamp(1.35rem, 2vw, 1.8rem); }
-    .journal-heading p { margin: 0; color: #52635d; font-size: .9rem; }
+    .journal-heading p { margin: 0; color: var(--muted-on-paper); font-size: .9rem; }
     .retry-journal { margin-top: 12px; border: 1px solid #9eafa7; border-radius: 9px; background: transparent; color: #30403a; padding: 8px 10px; font-weight: 600; cursor: pointer; }
     .retry-journal:hover { background: #dbe5df; }
     .events-filter { gap: 9px !important; margin-bottom: 20px !important; padding-bottom: 18px; border-bottom: 1px solid var(--surface-line); }
     .events-filter label { color: #33433e !important; font-size: .82rem; font-weight: 650 !important; }
-    .events-filter select, .events-filter input, #imageSearchInput { border: 1px solid #b4c0ba !important; border-radius: 9px !important; background: #f8fbf9 !important; color: var(--ink) !important; padding: 9px 10px !important; }
+    .events-filter select, .events-filter input, #imageSearchInput { border: 1px solid var(--border-on-paper) !important; border-radius: 9px !important; background: var(--paper-raised) !important; color: var(--ink) !important; padding: 9px 10px !important; }
     .events-filter > div[style] { margin-left: 0 !important; }
     #clearButton { border: 1px solid #aebbb4 !important; border-radius: 9px !important; background: transparent !important; color: #30403a !important; padding: 9px 11px !important; cursor: pointer; }
     /* Journal event rows: one authoritative layer. Thumbnails keep the camera's
        16:9 frame; the description gets a real reading measure. */
     #eventImagesContainer { display: grid !important; grid-template-columns: 1fr; gap: 12px; width: auto !important; }
-    .event-image-item { display: grid !important; grid-template-columns: 148px minmax(0, 1fr) auto; align-items: start; gap: 4px 14px; width: auto; padding: 10px !important; border: 1px solid #cad4ce !important; border-radius: 12px !important; background: #f8fbf9 !important; box-shadow: none; }
+    .event-image-item { display: grid !important; grid-template-columns: 148px minmax(0, 1fr) auto; align-items: start; gap: 4px 14px; width: auto; padding: 10px !important; border: 1px solid #cad4ce !important; border-radius: 12px !important; background: var(--paper-raised) !important; box-shadow: none; }
     .event-image-item:hover { transform: none; border-color: #9eafa7 !important; }
     .event-image-item .event-preview { display: block; border-radius: 8px; }
     .event-image-item img { display: block; width: 148px !important; aspect-ratio: 16 / 9; height: auto !important; object-fit: cover !important; border-radius: 8px !important; background: #dbe5df; }
-    .event-image-info { color: #31413b !important; font-size: .82rem !important; line-height: 1.45; }
+    .event-image-info { color: var(--ink-on-paper) !important; font-size: .82rem !important; line-height: 1.45; }
     .event-image-info strong { color: var(--ink); font-size: .9rem; }
-    .event-image-info small { color: #52635d; font-variant-numeric: tabular-nums; }
-    .event-description { margin: 7px 0 0 !important; padding: 7px 10px; max-width: 62ch; border-radius: 8px; background: #edf3ef; color: #22322d; font-size: .9rem !important; line-height: 1.55; overflow-wrap: anywhere; }
-    .event-description > small { display: block; margin-bottom: 2px; font-size: .72rem; font-weight: 650; letter-spacing: .03em; color: #52635d; }
-    .event-pending { display: block; margin-top: 6px; color: #52635d; font-style: italic; }
+    .event-image-info small { color: var(--muted-on-paper); font-variant-numeric: tabular-nums; }
+    .event-description { margin: 7px 0 0 !important; padding: 7px 10px; max-width: 62ch; border-radius: 8px; background: var(--paper-tint); color: #22322d; font-size: .9rem !important; line-height: 1.55; overflow-wrap: anywhere; }
+    .event-description > small { display: block; margin-bottom: 2px; font-size: .72rem; font-weight: 650; letter-spacing: .03em; color: var(--muted-on-paper); }
+    .event-pending { display: block; margin-top: 6px; color: var(--muted-on-paper); font-style: italic; }
     .person-chip { display: inline-block; margin-inline-start: 8px; padding: 2px 9px; border-radius: 999px; background: var(--sage-strong); color: var(--ink); font-size: .78rem; font-weight: 650; vertical-align: 2px; }
     .household-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
     .household-block h3 { margin: 0; font-size: .95rem; font-weight: 650; color: var(--paper); }
@@ -1393,7 +1383,7 @@
     .form-section { margin-top: 18px !important; padding: 18px !important; }
     .form-section summary { cursor: pointer; color: var(--ink); font-weight: 650; }
     .form-section form { margin-top: 0; }
-    .form-section input { border: 1px solid #b4c0ba; border-radius: 9px; padding: 10px; }
+    .form-section input { border: 1px solid var(--border-on-paper); border-radius: 9px; padding: 10px; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     /* Buttons sit on the light paper card here: paper-colored chrome vanishes. */
     #cameraSetup button:not(.icon-button) { background: var(--ink) !important; color: var(--paper) !important; border-radius: 10px !important; padding: 10px 16px !important; font-weight: 650; }
@@ -1402,13 +1392,13 @@
     #cameraSetup button:not(.icon-button):focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
     .setup-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--surface-line); }
     .setup-group:first-of-type { border-top: 0; padding-top: 4px; }
-    .setup-group h4 { margin: 0 0 10px; font-size: .82rem; font-weight: 650; letter-spacing: .02em; color: #52635d; }
+    .setup-group h4 { margin: 0 0 10px; font-size: .82rem; font-weight: 650; letter-spacing: .02em; color: var(--muted-on-paper); }
     .setup-group label { font-size: .88rem; color: var(--ink); }
-    .setup-hint { margin: 6px 0 0; color: #52635d; font-size: .8rem; line-height: 1.45; }
+    .setup-hint { margin: 6px 0 0; color: var(--muted-on-paper); font-size: .8rem; line-height: 1.45; }
     .storage-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
     .storage-input { display: flex; align-items: center; gap: 8px; }
     .storage-input input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
-    .storage-input span { color: #52635d; font-size: .88rem; }
+    .storage-input span { color: var(--muted-on-paper); font-size: .88rem; }
     /* Settings rows: label and always-visible caption on the left, control right. */
     .modal-content .modal-header h3 { color: var(--paper) !important; }
     /* Detection & Counts: tables belong to the dark modal surface, not the
@@ -1420,21 +1410,26 @@
     .modal-section-heading:first-child { margin-top: 6px; }
     .modal-add { border: 0; border-radius: 10px; background: var(--paper); color: var(--ink); padding: 8px 14px; font-weight: 650; cursor: pointer; }
     .modal-add:hover { background: var(--sage-strong); }
-    .modal-quiet { border: 1px solid rgba(232,238,235,.28); border-radius: 10px; background: transparent; color: var(--paper); padding: 8px 14px; font-weight: 600; cursor: pointer; }
+    .modal-quiet { border: 1px solid var(--line-strong); border-radius: 10px; background: transparent; color: var(--paper); padding: 8px 14px; font-weight: 600; cursor: pointer; }
     .modal-quiet:hover { background: var(--ink-soft); }
     .modal-add:focus-visible, .modal-quiet:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+    /* Touch-target floor: every tappable control reaches 44px. */
+    .primary-action, #searchButton, #loadMoreEventsBtn, .secondary-action, .modal-add, .modal-quiet, .retry-camera, .retry-journal, #clearButton { min-height: 44px; }
+    .events-filter label[for="alertsOnlyCheckbox"], label:has(> #alertsOnlyCheckbox) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 6px; cursor: pointer; }
+    #alertsOnlyCheckbox { width: 18px; height: 18px; accent-color: var(--sage-strong); cursor: pointer; }
     .modal-empty { color: var(--paper-muted); font-size: .88rem; }
+    .table-caption { margin: 10px 0 0; color: var(--paper-muted); font-size: .8rem; line-height: 1.5; }
     #alertsContainer { overflow-x: auto; }
     #alertsContainer table { color: var(--paper); }
-    #alertsContainer th { background: transparent !important; border-bottom: 1px solid rgba(232,238,235,.28) !important; color: var(--paper-muted) !important; font-size: .78rem; font-weight: 650; letter-spacing: .02em; padding: 8px 10px !important; }
-    #alertsContainer td { border-bottom: 1px solid rgba(232,238,235,.12) !important; padding: 10px !important; color: var(--paper) !important; font-size: .88rem; }
+    #alertsContainer th { background: transparent !important; border-bottom: 1px solid var(--line-strong) !important; color: var(--paper-muted) !important; font-size: .78rem; font-weight: 650; letter-spacing: .02em; padding: 8px 10px !important; }
+    #alertsContainer td { border-bottom: 1px solid var(--line-faint) !important; padding: 10px !important; color: var(--paper) !important; font-size: .88rem; }
     #alertsContainer tr:last-child td { border-bottom: 0 !important; }
     #alertsContainer input[type="checkbox"] { transform: none !important; width: 17px; height: 17px; accent-color: var(--sage-strong); }
-    #alertsContainer button { border: 1px solid rgba(232,238,235,.28) !important; border-radius: 8px !important; background: transparent !important; color: var(--danger) !important; padding: 6px 12px !important; font-weight: 600; cursor: pointer; }
+    #alertsContainer button { border: 1px solid var(--line-strong) !important; border-radius: 8px !important; background: transparent !important; color: var(--danger) !important; padding: 6px 12px !important; font-weight: 600; cursor: pointer; }
     #alertsContainer button:hover { background: #472729 !important; }
     .counts-wrapper { display: block !important; margin: 0 !important; padding: 4px 0 !important; background: transparent !important; border-radius: 0 !important; }
     #objectCounts { width: 100%; max-width: 380px; border-collapse: collapse; }
-    #objectCounts td { border-bottom: 1px solid rgba(232,238,235,.12) !important; color: var(--paper) !important; padding: 9px 10px !important; font-size: .88rem; }
+    #objectCounts td { border-bottom: 1px solid var(--line-faint) !important; color: var(--paper) !important; padding: 9px 10px !important; font-size: .88rem; }
     #objectCounts tr:last-child td { border-bottom: 0 !important; }
     #objectCounts .count-value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 650; }
     .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; }
@@ -1454,7 +1449,7 @@
     #multiView { margin-top: 22px; }
     .modal { background: rgba(5, 9, 10, .78) !important; backdrop-filter: blur(12px); }
     .modal-content { border: 1px solid rgba(232,238,235,.15) !important; border-radius: 16px !important; background: var(--ink-raised) !important; color: var(--paper) !important; box-shadow: var(--shadow-deep) !important; }
-    .modal input, .modal select { color: var(--paper) !important; background: #0e1819 !important; border-color: rgba(232,238,235,.24) !important; }
+    .modal input, .modal select { color: var(--paper) !important; background: #0e1819 !important; border-color: var(--line-strong) !important; }
     @media (max-width: 980px) {
       .app-frame { grid-template-columns: 1fr; }
       .app-rail { position: fixed; bottom: 12px; top: auto; left: 50%; transform: translateX(-50%); width: max-content; height: auto; flex-direction: row; padding: 8px; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-deep); }
@@ -1515,7 +1510,7 @@
     .event-preview { padding: 0; border: 0; background: transparent; cursor: pointer; }
     .event-image-actions svg { width: 20px; height: 20px; }
     .form-section { color-scheme: light; }
-    .form-section input { background: #f8fbf9; color: var(--ink); caret-color: var(--ink); }
+    .form-section input { background: var(--paper-raised); color: var(--ink); caret-color: var(--ink); }
     .events-section { color-scheme: light; }
     .local-status { white-space: normal; }
     #pipelineDetail { font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
@@ -2184,20 +2179,8 @@
                   <th style="text-align:left; padding:6px; border-bottom:1px solid #ccc;">Window</th>
                   <th style="text-align:left; padding:6px; border-bottom:1px solid #ccc;">Schedule</th>
                   <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">Enabled</th>
-                  <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">
-                    <span class="tooltip">
-                      Send Alerts
-                      <span class="tooltip-icon">?</span>
-                      <span class="tooltiptext">Deliver a notification on this Mac when this alert triggers.</span>
-                    </span>
-                  </th>
-                  <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">
-                    <span class="tooltip">
-                      Zone
-                      <span class="tooltip-icon">?</span>
-                      <span class="tooltiptext">Enable to only trigger this alert when objects are detected within the defined zone.</span>
-                    </span>
-                  </th>
+                  <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">Notify</th>
+                  <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">Zone</th>
                   <th style="text-align:center; padding:6px; border-bottom:1px solid #ccc;">Actions</th>
                 </tr>
               </thead><tbody>`;
@@ -2264,7 +2247,8 @@
             </tr>`;
           }
           
-          if (normalAlerts.length > 0) originalTable += `</tbody></table>`;
+          if (normalAlerts.length > 0) originalTable += `</tbody></table>
+            <p class="table-caption">Notify shows a notification on this Mac when the alert triggers. Zone limits the alert to the area drawn for this camera.</p>`;
 
           html += originalTable;
 
