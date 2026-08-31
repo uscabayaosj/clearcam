@@ -543,10 +543,12 @@
 
     .form-section input {
       padding: 6px;
-      margin: 4px;
+      margin: 4px 0;
       border: 1px solid var(--border-color);
       border-radius: 4px;
-      width: 200px;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       background: var(--bg-primary);
       color: var(--text-primary);
     }
@@ -1369,19 +1371,43 @@
     .form-section input { border: 1px solid var(--border-on-paper); border-radius: 9px; padding: 10px; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     /* Buttons sit on the light paper card here: paper-colored chrome vanishes. */
-    #cameraSetup button:not(.icon-button) { background: var(--ink) !important; color: var(--paper) !important; border-radius: 10px !important; padding: 10px 16px !important; font-weight: 650; }
-    #cameraSetup button:not(.icon-button):hover { background: var(--ink-soft) !important; }
-    #cameraSetup button:not(.icon-button):active { transform: scale(.98); }
-    #cameraSetup button:not(.icon-button):focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+    .settings-panel button:not(.icon-button):not(.secret-toggle) { background: var(--ink) !important; color: var(--paper) !important; border-radius: 10px !important; padding: 10px 16px !important; font-weight: 650; }
+    .settings-panel button:not(.icon-button):not(.secret-toggle):hover { background: var(--ink-soft) !important; }
+    .settings-panel button:not(.icon-button):not(.secret-toggle):active { transform: scale(.98); }
+    .settings-panel button:not(.icon-button):not(.secret-toggle):focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
     .setup-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--surface-line); }
     .setup-group:first-of-type { border-top: 0; padding-top: 4px; }
     .setup-group h4 { margin: 0 0 10px; font-size: .82rem; font-weight: 650; letter-spacing: .02em; color: var(--muted-on-paper); }
     .setup-group label { font-size: .88rem; color: var(--ink); }
     .setup-hint { margin: 6px 0 0; color: var(--muted-on-paper); font-size: .8rem; line-height: 1.45; }
+    .settings-modal { max-width: 620px; width: min(620px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+    .settings-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; border-bottom: 1px solid var(--line-faint); padding-bottom: 10px; }
+    .settings-tab { appearance: none; -webkit-appearance: none; border: 1px solid transparent; background: transparent; color: var(--muted-on-paper); font: inherit; font-size: .85rem; font-weight: 600; padding: 7px 12px; border-radius: 9px; cursor: pointer; min-height: 36px; }
+    .settings-tab:hover { background: var(--paper-muted); color: var(--ink); }
+    .settings-tab[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+    .settings-tab:focus-visible { outline: 2px solid var(--sage-strong); outline-offset: 2px; }
+    .settings-panels { overflow-y: auto; padding-right: 4px; }
+    .settings-panel .setup-group + .setup-group { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line-faint); }
+    .settings-panel .setup-group h4 { margin: 0 0 8px; color: var(--paper); font-size: .95rem; }
+    .settings-panel label, .settings-panel .alert-group-label { color: var(--paper); }
+    .settings-panel .setup-hint, .settings-panel small { color: var(--paper-muted); }
+    .settings-panel input[type=text], .settings-panel input[type=password], .settings-panel input[type=number],
+    .settings-panel input[type=time] { background: var(--ink-soft); color: var(--paper); border: 1px solid var(--line-strong); }
+    /* A file picker sizes itself from its button and filename, so it needs a ceiling. */
+    .settings-panel input[type=file] { width: 100%; max-width: 100%; box-sizing: border-box; color: var(--paper); }
+    .settings-panel input::placeholder { color: var(--paper-muted); opacity: .8; }
+    .settings-panel input[type=text], .settings-panel input[type=password], .settings-panel input[type=number], .settings-panel input[type=time] { max-width: 100%; box-sizing: border-box; }
+    .settings-panel form button[type=submit] { width: 100%; margin-top: 12px; min-height: 42px; }
+    .settings-save { margin-top: 18px; display: flex; justify-content: flex-end; }
+    .setting-row.unavailable { opacity: .62; }
+    .setting-row.unavailable input, .setting-row.unavailable select { cursor: not-allowed; }
+    .setting-unavailable { display: inline-block; margin-top: 4px; font-size: .72rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--brass); }
+    .ledger-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .ledger-block h3 { margin: 0 0 6px; font-size: .95rem; color: var(--paper); }
     .secret-field { display: flex; gap: 8px; align-items: stretch; }
     .secret-field input { flex: 1; min-width: 0; }
     .secret-toggle { flex: 0 0 auto; min-height: 44px; padding: 0 12px; border-radius: 9px; font-weight: 650; cursor: pointer; }
-    #cameraSetup .secret-toggle { border: 1px solid var(--border-on-paper); background: transparent !important; color: var(--ink-on-paper) !important; }
+    .settings-panel .secret-toggle { border: 1px solid var(--border-on-paper); background: transparent !important; color: var(--ink-on-paper) !important; }
     .modal .secret-field .secret-toggle { border: 1px solid var(--line-strong); background: transparent; color: var(--paper); }
     .secret-toggle:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
     .storage-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
@@ -1618,7 +1644,7 @@
         </div>
         <div class="topbar-actions">
           <span class="local-status" role="status" id="engineState">Checking engine…</span>
-          <button class="primary-action" type="button" onclick="document.getElementById('cameraSetup').open = true; document.getElementById('cameraSetup').scrollIntoView({behavior: 'smooth', block: 'center'}); document.querySelector('#addCameraForm input[name=cam_name]').focus()">Add camera</button>
+          <button class="primary-action" type="button" onclick="openAddCamera()">Add camera</button>
         </div>
       </header>
       <section class="camera-reel-section" aria-labelledby="camera-reel-heading">
@@ -1691,7 +1717,7 @@
     <button onclick="clearSearch()" id="clearButton" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s;">Clear</button>
   </div>
   </div>
-  <p id="searchAvailability" role="status" hidden>Text and image search are off. Enable OpenCLIP Search in Global settings to search observations. Camera and date filters are still available.</p>
+  <p id="searchAvailability" role="status" hidden>Search by text or image is not available in this build. Camera and date filters still work.</p>
   <div id="eventImagesContainer">
     <p style="text-align:center; color:#666; width:100%;">No events detected yet.</p>
   </div>
@@ -1715,72 +1741,22 @@
       <span id="storageWarningText"></span>
       <button type="button" class="storage-warning-action" onclick="revealStorageControl()">Adjust storage limit</button>
     </div>
-    <section class="household-block" aria-labelledby="summary-heading">
+    <section class="ledger-block" aria-labelledby="summary-heading">
       <h3 id="summary-heading">Daily summary</h3>
-      <p class="ledger-lead">Once a day, ClearCam writes a short recap of who and what was seen. It is generated on this Mac.</p>
-      <div class="summary-controls">
-        <span class="switch"><input type="checkbox" id="summaryEnabled" aria-label="Daily summary on or off"><span class="switch-knob" aria-hidden="true"></span></span>
-        <label for="summaryTime">at</label>
-        <input type="time" id="summaryTime" step="60" value="21:00">
-      </div>
+      <p id="summaryStatusLine" class="ledger-lead">Checking…</p>
       <div id="latestSummary" class="latest-summary" hidden>
         <small id="latestSummaryWhen"></small>
         <p id="latestSummaryText"></p>
       </div>
     </section>
-    <section class="household-block" aria-labelledby="household-heading">
+    <section class="ledger-block" aria-labelledby="household-heading">
       <h3 id="household-heading">Household</h3>
-      <p class="ledger-lead">Name people from their journal events; recognized names appear on future events and notifications. Faces never leave this Mac.</p>
-      <ul id="householdList" class="household-list"></ul>
+      <p id="householdSummaryLine" class="ledger-lead">Checking…</p>
     </section>
     <div class="ledger-actions">
-      <button class="secondary-action" type="button" onclick="openSettingsModal()">Global settings</button>
+      <button class="secondary-action" type="button" onclick="openSettingsModal()">Settings</button>
       <button class="secondary-action" type="button" onclick="toggleMultiView()">Open multi-camera view</button>
     </div>
-    <details class="form-section" id="cameraSetup">
-      <summary>Camera &amp; storage setup</summary>
-      <div class="setup-group">
-        <h4>Add a camera</h4>
-        <form id="addCameraForm">
-          <label for="cameraNameInput">Camera name</label>
-          <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
-          <label for="cameraSourceInput">Stream address</label>
-          <div class="secret-field">
-            <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://user:password@address/stream1" required autocomplete="off">
-            <button type="button" class="secret-toggle" data-reveals="cameraSourceInput" aria-label="Show stream address">Show</button>
-          </div>
-          <p class="setup-hint">Include the camera account and password in the address.</p>
-          <button type="submit">Add Camera</button>
-        </form>
-      </div>
-      <div class="setup-group">
-        <h4>Storage</h4>
-        <div class="storage-row">
-          <label for="maxStorageInput">Keep recordings up to</label>
-          <div class="storage-input">
-            <input type="number" id="maxStorageInput" min="1" inputmode="numeric">
-            <span aria-hidden="true">GB</span>
-            <button type="button" id="setMaxStorageBtn">Save</button>
-          </div>
-        </div>
-        <p class="setup-hint">Older days are removed first. Today's recording is always kept.</p>
-      </div>
-      <div class="setup-group analyse-section">
-        <h4>Analyse a video file</h4>
-        <form id="analyseFootageForm">
-          <label for="videoFileInput" class="visually-hidden">Video to analyse</label>
-          <input type="file" id="videoFileInput" accept="video/*" required>
-          <button type="submit" id="analyseBtn">
-            <span class="btn-spinner" style="display:none;"></span>
-            <span class="btn-text">Analyse Footage</span>
-          </button>
-        </form>
-        <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
-          <div class="spinner" style="margin-bottom:6px;"></div>
-          <small id="analyseProgressText">Uploading 0%</small>
-        </div>
-      </div>
-    </details>
   </aside>
   </div>
   
@@ -1854,19 +1830,93 @@
     </div>
 
     <div id="settingsModal" class="modal">
-      <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-content settings-modal">
         <div class="modal-header">
-          <h3>Global Settings</h3>
+          <h3>Settings</h3>
           <span class="close" onclick="closeSettingsModal()">&times;</span>
         </div>
 
-        <div id="settingsContainer" style="display: flex; flex-direction: column; gap: 12px;">
-          <p>Loading settings...</p>
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" role="tab" class="settings-tab" data-panel="panelCameras" aria-selected="true">Cameras &amp; storage</button>
+          <button type="button" role="tab" class="settings-tab" data-panel="panelAI" aria-selected="false">Detection &amp; AI</button>
+          <button type="button" role="tab" class="settings-tab" data-panel="panelSummary" aria-selected="false">Daily summary</button>
+          <button type="button" role="tab" class="settings-tab" data-panel="panelHousehold" aria-selected="false">Household</button>
         </div>
 
-        <p id="settingsFeedback" role="alert"></p>
-        <div class="form-actions" style="margin-top: 20px; display: flex; justify-content: center;">
-          <button type="button" onclick="saveSettings()">Save changes</button>
+        <div class="settings-panels">
+          <section id="panelCameras" class="settings-panel" role="tabpanel">
+      <div class="setup-group">
+        <h4>Add a camera</h4>
+        <form id="addCameraForm">
+          <label for="cameraNameInput">Camera name</label>
+          <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
+          <label for="cameraSourceInput">Stream address</label>
+          <div class="secret-field">
+            <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://user:password@address/stream1" required autocomplete="off">
+            <button type="button" class="secret-toggle" data-reveals="cameraSourceInput" aria-label="Show stream address">Show</button>
+          </div>
+          <p class="setup-hint">Include the camera account and password in the address.</p>
+          <button type="submit">Add Camera</button>
+        </form>
+      </div>
+      <div class="setup-group">
+        <h4>Storage</h4>
+        <div class="storage-row">
+          <label for="maxStorageInput">Keep recordings up to</label>
+          <div class="storage-input">
+            <input type="number" id="maxStorageInput" min="1" inputmode="numeric">
+            <span aria-hidden="true">GB</span>
+            <button type="button" id="setMaxStorageBtn">Save</button>
+          </div>
+        </div>
+        <p class="setup-hint">Older days are removed first. Today's recording is always kept.</p>
+      </div>
+      <div class="setup-group analyse-section">
+        <h4>Analyse a video file</h4>
+        <form id="analyseFootageForm">
+          <label for="videoFileInput" class="visually-hidden">Video to analyse</label>
+          <input type="file" id="videoFileInput" accept="video/*" required>
+          <button type="submit" id="analyseBtn">
+            <span class="btn-spinner" style="display:none;"></span>
+            <span class="btn-text">Analyse Footage</span>
+          </button>
+        </form>
+        <div id="analyseProgressWrapper" style="display:none; margin-top:10px; width:100%;">
+          <div class="spinner" style="margin-bottom:6px;"></div>
+          <small id="analyseProgressText">Uploading 0%</small>
+        </div>
+      </div>
+          </section>
+
+          <section id="panelAI" class="settings-panel" role="tabpanel" hidden>
+            <div id="settingsContainer" class="settings-rows">
+              <p>Loading settings…</p>
+            </div>
+            <p id="settingsFeedback" role="alert"></p>
+            <div class="form-actions settings-save">
+              <button type="button" onclick="saveSettings()">Save changes</button>
+            </div>
+          </section>
+
+          <section id="panelSummary" class="settings-panel" role="tabpanel" hidden>
+            <div class="setup-group">
+              <h4>Daily summary</h4>
+              <p class="setup-hint">Once a day ClearCam writes a short recap of who and what was seen. It is generated on this Mac.</p>
+      <div class="summary-controls">
+        <span class="switch"><input type="checkbox" id="summaryEnabled" aria-label="Daily summary on or off"><span class="switch-knob" aria-hidden="true"></span></span>
+        <label for="summaryTime">at</label>
+        <input type="time" id="summaryTime" step="60" value="21:00">
+      </div>
+            </div>
+          </section>
+
+          <section id="panelHousehold" class="settings-panel" role="tabpanel" hidden>
+            <div class="setup-group">
+              <h4>Household</h4>
+              <p class="setup-hint">Name people from their journal events using the person button on an event; recognized names then appear on future events and notifications. Faces never leave this Mac.</p>
+              <ul id="householdList" class="household-list"></ul>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -1952,7 +2002,7 @@
 
           <details class="more-classes" style="width: 90%;">
             <summary>Advanced: describe what to look for</summary>
-            <p class="setup-hint" style="color: var(--paper-muted);">Alerts on a written description of the object (needs an object type selected and OpenCLIP Search enabled in Global Settings).</p>
+            <p class="setup-hint" id="alertDescHint" style="color: var(--paper-muted);">Alerts on a written description of the object. Needs an object type selected and description search, which this build does not include.</p>
             <div class="alert-inline-row">
               <input type="text" id="alertDesc" name="desc" placeholder="e.g. red delivery van" style="width: 180px;">
               <input type="number" id="alertThreshold" name="threshold" min="1" placeholder="Match %" style="width: 90px;">
@@ -3933,10 +3983,40 @@
       }
     });
 
-    async function openSettingsModal() {
+    let capabilities = null;
+    async function loadCapabilities() {
+      if (capabilities) return capabilities;
+      try {
+        capabilities = await (await fetch('/capabilities')).json();
+      } catch (_) {
+        capabilities = null;   // unknown: render every option rather than hide one wrongly
+      }
+      return capabilities;
+    }
+
+    function showSettingsPanel(panelId) {
+      document.querySelectorAll('.settings-tab').forEach(tab => {
+        const selected = tab.dataset.panel === panelId;
+        tab.setAttribute('aria-selected', String(selected));
+      });
+      document.querySelectorAll('.settings-panel').forEach(panel => {
+        panel.hidden = panel.id !== panelId;
+      });
+    }
+    document.addEventListener('click', (event) => {
+      const tab = event.target.closest('.settings-tab');
+      if (tab) showSettingsPanel(tab.dataset.panel);
+    });
+
+    async function openSettingsModal(panelId) {
       const modal = document.getElementById("settingsModal");
       modal.style.display = "flex";
       document.getElementById('settingsFeedback').textContent = '';
+      showSettingsPanel(panelId || 'panelCameras');
+      await loadCapabilities();
+      loadHousehold();
+      loadSummaryState();
+      fetchMaxStorage();
 
       const container = document.getElementById("settingsContainer");
       container.innerHTML = "<p>Loading settings...</p>";
@@ -4000,7 +4080,8 @@
         if (key === "model_size") {
           input = document.createElement("select");
           const sizeNames = { t: "Tiny", s: "Small", m: "Medium", c: "Compact", e: "Extended" };
-          ["t", "s", "m", "c", "e"].forEach(opt => {
+          const allowed = capabilities?.model_sizes || ["t", "s", "m", "c", "e"];
+          ["t", "s", "m", "c", "e"].filter(opt => allowed.includes(opt)).forEach(opt => {
             const option = document.createElement("option");
             option.value = opt;
             option.textContent = sizeNames[opt];
@@ -4020,10 +4101,11 @@
         }
         else if (key === "qwen_size") {
           input = document.createElement("select");
+          const allowedQwen = capabilities?.qwen_sizes || [2, 4];
           const qwenOptions = [
             { value: 2, label: "2B" },
             { value: 4, label: "4B" }
-          ];
+          ].filter(opt => allowedQwen.includes(opt.value));
           qwenOptions.forEach(opt => {
             const option = document.createElement("option");
             option.value = opt.value;
@@ -4065,6 +4147,20 @@
         } else {
           wrapper.appendChild(input);
         }
+        // A switch the engine will refuse should read as unavailable, not broken.
+        const blocked = (key === 'use_clip' && capabilities && capabilities.use_clip === false)
+                     || (key === 'use_face' && capabilities && capabilities.use_face === false);
+        if (blocked) {
+          wrapper.classList.add('unavailable');
+          input.disabled = true;
+          if (input.type === 'checkbox') input.checked = false;
+          const note = document.createElement('span');
+          note.className = 'setting-unavailable';
+          note.textContent = 'Not in this build';
+          text.appendChild(note);
+          const why = capabilities?.reasons?.[key];
+          if (why) { const small = document.createElement('small'); small.textContent = why; text.appendChild(small); }
+        }
         container.appendChild(wrapper);
       });
     }
@@ -4076,7 +4172,7 @@
       
       inputs.forEach(input => {
         const key = input.dataset.key;
-        if (!key) return;
+        if (!key || input.disabled) return;
         
         if (input.type === "checkbox") {
           payload[key] = input.checked;
@@ -4129,13 +4225,21 @@
         },
         body: body
       });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        // The engine explains exactly what it refused; repeating "try again"
+        // for a setting this build cannot support just sends people in circles.
+        const reason = await response.json().then(body => body && body.error).catch(() => null);
+        throw new Error(reason || '');
+      }
       closeSettingsModal();
       announce('Settings saved.');
       loadFeatureFlags();
       refreshLocalAIStatus();
-      } catch (_) {
-        document.getElementById('settingsFeedback').textContent = 'Settings were not saved. Your changes are still here; try again.';
+      } catch (error) {
+        const detail = (error && error.message || '').replace(/^Error:\s*/, '');
+        document.getElementById('settingsFeedback').textContent = detail
+          ? detail + ' Your other changes are still here.'
+          : 'Settings were not saved. Your changes are still here; try again.';
       } finally {
         saveButton.disabled = false;
         saveButton.textContent = 'Save changes';
@@ -4355,9 +4459,13 @@
       });
     });
 
-    function revealStorageControl() {
-      const setup = document.getElementById('cameraSetup');
-      setup.open = true;
+    async function openAddCamera() {
+      await openSettingsModal('panelCameras');
+      document.querySelector('#addCameraForm input[name=cam_name]').focus();
+    }
+
+    async function revealStorageControl() {
+      await openSettingsModal('panelCameras');
       const input = document.getElementById('maxStorageInput');
       input.scrollIntoView({block: 'center'});
       input.focus();
@@ -4405,11 +4513,16 @@
       }
     }
     async function loadHousehold() {
-      const list = document.getElementById('householdList');
+      const list = document.getElementById('householdList');   // only present while Settings is open
       try {
         const response = await fetch('/household');
         if (!response.ok) throw new Error();
         const members = await response.json();
+        const line = document.getElementById('householdSummaryLine');
+        if (line) line.textContent = members.length
+          ? `${members.length} ${members.length === 1 ? 'person' : 'people'} recognized: ${members.map(m => m.name).join(', ')}.`
+          : 'No one enrolled yet. Use the person button on a journal event to name someone.';
+        if (!list) return;
         list.innerHTML = '';
         if (!members.length) {
           const empty = document.createElement('li'); empty.className = 'household-empty';
@@ -4455,8 +4568,14 @@
     async function loadSummaryState() {
       try {
         const config = await (await fetch('/summary_config')).json();
-        document.getElementById('summaryEnabled').checked = !!config.enabled;
-        if (config.time) document.getElementById('summaryTime').value = config.time;
+        const toggle = document.getElementById('summaryEnabled');
+        const at = document.getElementById('summaryTime');
+        if (toggle) toggle.checked = !!config.enabled;
+        if (at && config.time) at.value = config.time;
+        const line = document.getElementById('summaryStatusLine');
+        if (line) line.textContent = config.enabled
+          ? `On — a recap is written each day around ${config.time || '21:00'}.`
+          : 'Off. Turn it on in Settings to get a daily recap of who and what was seen.';
         const recent = await (await fetch('/summaries?count=1')).json();
         const box = document.getElementById('latestSummary');
         if (recent.length) {

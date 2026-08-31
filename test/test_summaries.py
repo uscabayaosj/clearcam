@@ -58,13 +58,49 @@ class SummariesTests(unittest.TestCase):
         facts = summaries.collect_window(self.cameras, start, end)
         self.assertIn('No activity was detected', summaries.deterministic_summary(facts))
 
-    def test_prompt_contains_baseline_and_observations_only(self):
-        make_event(self.cameras, 'front', self.noon, people=['Ana'], description='A red van stops.')
+    def test_prompt_groups_subjects_instead_of_listing_events(self):
+        for index in range(4):
+            make_event(self.cameras, 'front', self.noon + timedelta(minutes=index),
+                       people=[], description='A black SUV is driving on the road.')
+        make_event(self.cameras, 'front', self.noon + timedelta(hours=1), people=['Ana'],
+                   description='A red van is stopping by the gate.')
+        make_event(self.cameras, 'front', self.noon + timedelta(hours=2), people=[],
+                   description='A pink box is sitting on the path.')
         start, end = self.window()
         prompt = summaries.build_prompt(summaries.collect_window(self.cameras, start, end))
-        self.assertIn('A red van stops.', prompt)
+        self.assertIn('black SUV: seen 4 times', prompt)
         self.assertIn('never invent', prompt)
         self.assertIn('Ana was seen 1 time', prompt)
+        # the raw sentences are never handed over, so the model cannot enumerate them
+        self.assertNotIn('is driving on the road', prompt)
+
+    def test_subject_grouping_and_rollup(self):
+        for index in range(3):
+            make_event(self.cameras, 'front', self.noon + timedelta(minutes=index), people=[],
+                       description='A black SUV is driving on a road in a park.')
+        singles = ('A person on a scooter is riding past.', 'A pink box is on the kerb.',
+                   'A black car is turning at the intersection.', 'A cat is crossing the grass.')
+        for offset, description in enumerate(singles):
+            make_event(self.cameras, 'front', self.noon + timedelta(hours=1, minutes=offset),
+                       people=[], description=description)
+        start, end = self.window()
+        facts = summaries.collect_window(self.cameras, start, end)
+        top, remainder = summaries.subject_counts(facts)
+        self.assertEqual(top[0], ('black SUV', 3))
+        self.assertEqual(len(top), 3)
+        self.assertEqual(remainder, 2)
+        self.assertIn('plus 2 other one-off sightings', summaries.deterministic_summary(facts))
+
+    def test_truncated_generation_loses_its_partial_tail(self):
+        cut = ('A black vehicle was seen 2 times. A person on a scooter was seen 1 time. '
+               'A person on a bicycle was seen')
+        trimmed = summaries.trim_to_complete_sentences(cut)
+        self.assertTrue(trimmed.endswith('1 time.'))
+        self.assertNotIn('A person on a bicycle was seen', trimmed)
+        # repeated sentences collapse, and the cap holds
+        loop = 'A man was seen. ' * 8
+        self.assertEqual(summaries.trim_to_complete_sentences(loop), 'A man was seen.')
+        self.assertEqual(len(summaries.trim_to_complete_sentences('One. Two. Three. Four. Five. Six.').split('.')), 6)
 
     def test_is_due_once_per_day(self):
         now = datetime.now().replace(hour=21, minute=30).timestamp()

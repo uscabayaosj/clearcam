@@ -7,6 +7,32 @@ from pathlib import Path
 
 PROMPT = "Describe only what is visibly happening in this camera image in one short sentence. Do not infer identity, intent, or events outside the image."
 
+
+def frame_region(box, width, height):
+    """Where a detection sits in the frame, in words a reader can picture."""
+    x1, y1, x2, y2 = box
+    across = ('left', 'centre', 'right')[min(2, int(((x1 + x2) / 2) / max(width, 1) * 3))]
+    down = ('top', 'middle', 'bottom')[min(2, int(((y1 + y2) / 2) / max(height, 1) * 3))]
+    if across == 'centre' and down == 'middle': return 'centre'
+    if across == 'centre': return f'{down} centre'
+    if down == 'middle': return across
+    return f'{down} {across}'
+
+
+def trigger_prompt(label, box, width, height):
+    """Point the model at the detection that fired, not the prettiest thing in view.
+
+    The event exists because one box crossed a threshold; a description that
+    opens on scenery buries the reason the owner was alerted.
+    """
+    if not label: return PROMPT
+    where = frame_region(box, width, height) if box else None
+    located = f" in the {where} of the frame" if where else ""
+    return (f"A {label} was detected{located} and is outlined by a box in this camera image. "
+            f"Begin your sentence with that {label} and what it is visibly doing, then add only "
+            "essential surroundings. One short sentence. Do not infer identity or intent, and do "
+            "not mention the box.")
+
 def read_description(path):
     try:
         return json.loads(Path(path).with_suffix('.description.json').read_text()).get('description')
@@ -40,11 +66,11 @@ class LocalDescriptions:
     def status(self):
         return dict(enabled=self.enabled, model=f'Qwen3-VL-{self.size}B', state=self.state, error=self.error, queued=self.jobs.qsize())
 
-    def submit(self, image_path, camera_name, notify=False):
+    def submit(self, image_path, camera_name, notify=False, prompt=None):
         if not self.enabled:
             return False
         try:
-            self.jobs.put_nowait((Path(image_path), camera_name, notify))
+            self.jobs.put_nowait((Path(image_path), camera_name, (notify, prompt)))
             return True
         except queue.Full:
             return False
@@ -88,6 +114,8 @@ class LocalDescriptions:
     def _run(self):
         while True:
             path, camera_name, notify = self.jobs.get()
+            prompt = PROMPT
+            if isinstance(notify, tuple): notify, override = notify; prompt = override or PROMPT
             if path == 'summary':
                 prompt, on_result = camera_name, notify
                 try:
@@ -119,7 +147,7 @@ class LocalDescriptions:
                     self.model = self.model_factory(size=f'{self.size}B', res=(448, 448))
                     self.model_size = self.size
                 self.state = 'describing'
-                description = self.model.generate(prompt=PROMPT, image_path=path.resolve(), reset=True, max_tokens=96, quiet=True, on_state=self._set_state).strip()
+                description = self.model.generate(prompt=prompt, image_path=path.resolve(), reset=True, max_tokens=96, quiet=True, on_state=self._set_state).strip()
                 if not description:
                     raise ValueError('Model returned an empty description')
                 if not self.enabled or not path.exists():

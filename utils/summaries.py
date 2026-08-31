@@ -75,6 +75,65 @@ def quiet_ranges(active_hours, start_ts, end_ts):
                   key=len, reverse=True)
 
 
+SUBJECT_VERBS = (' is ', ' are ', ' was ', ' were ', ' appears ', ' stands ', ' walks ',
+                 ' drives ', ' sits ', ' rides ', ' moves ', ' can be ', ' seems ')
+TOP_SUBJECTS = 3
+
+
+def subject_phrase(description):
+    """The leading noun phrase of a description: 'A black SUV is driving…' -> 'a black SUV'."""
+    text = ' '.join((description or '').split())
+    if not text: return None
+    lowered = text.lower()
+    cut = min((lowered.find(verb) for verb in SUBJECT_VERBS if verb in lowered), default=-1)
+    phrase = text[:cut] if cut > 0 else text.split(',')[0]
+    phrase = re.sub(r'^(a|an|the)\s+', '', phrase.strip(), flags=re.I).rstrip('.').strip()
+    if not phrase or len(phrase) > 60: return None
+    return phrase[0].lower() + phrase[1:]
+
+
+def subject_counts(facts):
+    """Group descriptions by subject so the summary states counts, not a list."""
+    counts = Counter()
+    for event in facts['events']:
+        phrase = subject_phrase(event['description'])
+        if phrase: counts[phrase] += 1
+    top = counts.most_common(TOP_SUBJECTS)
+    remainder = sum(count for phrase, count in counts.items()
+                    if phrase not in {name for name, _ in top})
+    return top, remainder
+
+
+def _subject_sentence(facts):
+    top, remainder = subject_counts(facts)
+    if not top: return None
+    parts = [f"{phrase} ({_plural(count, 'time')})" for phrase, count in top]
+    sentence = 'Most seen: ' + ', '.join(parts)
+    if remainder:
+        sentence += f", plus {_plural(remainder, 'other one-off sighting')}"
+    return sentence + '.'
+
+
+def trim_to_complete_sentences(text, max_sentences=5):
+    """Drop a truncated tail and any repeated sentence; cap the length.
+
+    Generation stops at a token limit, which usually lands mid-sentence. A
+    summary that ends in "A person on a bicycle was seen" is worse than one
+    sentence shorter, so the partial tail goes.
+    """
+    if not text: return text
+    pieces = re.findall(r'[^.!?]+[.!?]', text.strip())
+    kept, seen = [], set()
+    for piece in pieces:
+        sentence = piece.strip()
+        fingerprint = sentence.lower()
+        if fingerprint in seen: continue
+        seen.add(fingerprint)
+        kept.append(sentence)
+        if len(kept) == max_sentences: break
+    return ' '.join(kept)
+
+
 def deterministic_summary(facts):
     """The honest template. Also the shape the model is asked to preserve."""
     events = facts['events']
@@ -88,6 +147,8 @@ def deterministic_summary(facts):
     if facts['unrecognized']:
         # "Not recognized" is what the data supports; a face may simply not be visible.
         lines.append(f"A person was seen {_plural(facts['unrecognized'], 'time')} without being recognized.")
+    subjects = _subject_sentence(facts)
+    if subjects: lines.append(subjects)
     busiest = max(facts['cameras'].items(), key=lambda kv: kv[1])
     if len(facts['cameras']) > 1:
         lines.append(f"Busiest camera: {busiest[0]} ({_plural(busiest[1], 'event')}).")
@@ -98,20 +159,25 @@ def deterministic_summary(facts):
 
 
 def build_prompt(facts):
-    described = [e for e in facts['events'] if e['description']][:MAX_DESCRIPTIONS_IN_PROMPT]
-    observations = '\n'.join(
-        f"- {datetime.fromtimestamp(e['time']).strftime('%H:%M')} {e['camera']}"
-        f"{' (' + ', '.join(e['people']) + ')' if e['people'] else ''}: {e['description']}"
-        for e in described)
+    """Group before generating: the model can only restate what it is given.
+
+    Handing over every observation invites an enumeration that runs past the
+    token limit; handing over ranked subject counts keeps it brief by
+    construction, without a larger budget.
+    """
+    top, remainder = subject_counts(facts)
+    observations = '\n'.join(f'- {phrase}: seen {_plural(count, "time")}' for phrase, count in top)
+    if remainder:
+        observations += f'\n- {_plural(remainder, "other one-off sighting")}, not individually notable'
     return (
         "You summarize a home camera's monitoring period for its owner. Use ONLY the facts below; "
-        "never invent events, people, or details. Group repeated sightings of the same person or "
-        "object and state how many times each was seen, e.g. \"A man in a black shirt was seen 4 "
-        "times\". Mention recognized household names first with their counts, then unrecognized "
-        "people, then notable objects or actions, then quiet periods. At most 5 plain sentences, "
-        "under 80 words, no headings, no advice, and never repeat a sentence.\n\n"
+        "never invent events, people, or details. Write at most 4 short sentences, under 70 words "
+        "total. Name recognized household members first with their counts, then unrecognized "
+        "people, then the most-seen subjects. Do NOT list every subject: cover the ranked ones and "
+        "fold the rest into a single count. No headings, no advice, never repeat a sentence, and "
+        "finish your final sentence.\n\n"
         f"Baseline summary (keep its numbers exactly): {deterministic_summary(facts)}\n\n"
-        f"Individual observations:\n{observations if observations else '- none recorded'}\n\nSummary:"
+        f"Most-seen subjects:\n{observations if observations else '- none recorded'}\n\nSummary:"
     )
 
 

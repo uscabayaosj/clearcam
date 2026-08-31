@@ -44,7 +44,7 @@ from utils import keychain
 from utils import household
 from utils import summaries
 from utils import macos_notifications
-from utils.local_descriptions import LocalDescriptions, read_description
+from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt
 import multiprocessing
 import re
 import base64
@@ -78,6 +78,43 @@ def notifications_muted():
   return time.time() < notifications_muted_until
 
 
+def build_capabilities():
+  """What this build can actually run, from the models it ships with.
+
+  The settings UI reads this so it never offers a switch the engine will
+  refuse: an option that cannot work should look unavailable, not broken.
+  """
+  if os.environ.get('CLEARCAM_NATIVE') != '1':
+    return dict(use_clip=True, use_face=True, model_sizes=['t', 's', 'm', 'c', 'e'], qwen_sizes=[2, 4])
+  return dict(
+      use_clip=False,          # OpenCLIP weights are not bundled
+      use_face=True,           # AdaFace and BlazeFace are bundled
+      model_sizes=['t'],       # only yolov9-t is bundled
+      qwen_sizes=[2],          # only Qwen3-VL-2B is bundled
+      reasons=dict(
+          use_clip='Search by description needs the OpenCLIP model, which is not included in this build.',
+          model_sizes='This build includes the Tiny detection model only.',
+          qwen_sizes='This build includes the 2B description model only.'))
+
+
+def unsupported_settings(data):
+  """The one place that decides whether a settings change can be honoured."""
+  caps = build_capabilities()
+  if data.get('use_clip') and not caps['use_clip']:
+    return caps['reasons']['use_clip']
+  if data.get('use_face') and not caps['use_face']:
+    return 'Face search is not included in this build.'
+  if data.get('model_size', 't') not in caps['model_sizes']:
+    return caps['reasons']['model_sizes']
+  try:
+    qwen = int(data.get('qwen_size', 2))
+  except (TypeError, ValueError):
+    return 'Description model must be a number.'
+  if qwen not in caps['qwen_sizes']:
+    return caps['reasons']['qwen_sizes']
+  return None
+
+
 def summary_config():
   stored = database.run_get('summary', 'config')
   return stored if isinstance(stored, dict) else dict(enabled=False, time=summaries.DEFAULT_TIME, last_run=0)
@@ -98,6 +135,7 @@ def run_summary_if_due():
       fallback = summaries.deterministic_summary(facts)
 
       def finish(model_text):
+        if model_text: model_text = summaries.trim_to_complete_sentences(model_text)
         if model_text and not summaries.acceptable_summary(model_text):
           print('Summary model output rejected (degenerate); using template.')
           model_text = None
@@ -711,7 +749,14 @@ class VideoCapture:
                     title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
                     threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
                   if not self.vod[cam_name] and global_settings.use_qwen:
-                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif)
+                    # Lead the description with the detection that fired the event.
+                    trigger = max(filtered_preds, key=lambda p: p[4], default=None)
+                    prompt = None
+                    if trigger is not None:
+                      height, width = self.last_frames[cam_name][-1].shape[:2]
+                      label = class_labels[int(trigger[5])] if int(trigger[5]) < len(class_labels) else None
+                      prompt = trigger_prompt(label, trigger[:4], width, height)
+                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif, prompt=prompt)
                   self.last_det[cam_name] = time.time()
                   self.pipeline[cam_name]["last_event"] = time.time()
                   alert.last_det = time.time()
@@ -940,6 +985,15 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         "count": len(image_data),
       }
       self.send_200(response_data)
+
+    def send_refusal(self, message, code=400):
+      """A refusal the interface can quote back to the person verbatim."""
+      body = json.dumps(dict(error=message)).encode('utf-8')
+      self.send_response(code)
+      self.send_header("Content-Type", "application/json")
+      self.send_header("Content-Length", str(len(body)))
+      self.end_headers()
+      self.wfile.write(body)
 
     def send_200(self, body=None):
       self.send_response(200)
@@ -1197,6 +1251,10 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_200(alert_info)
             return
 
+        if parsed_path.path == '/capabilities':
+            self.send_200(build_capabilities())
+            return
+
         if parsed_path.path == '/summary_config':
             config = summary_config()
             enabled = query.get('enabled', [None])[0]
@@ -1431,8 +1489,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           content_length = int(self.headers.get('Content-Length', 0))
           body = self.rfile.read(content_length)
           data = json.loads(body.decode('utf-8'))
-          if os.environ.get('CLEARCAM_NATIVE') == '1' and (data.get('use_clip') or data.get('use_face') or data.get('model_size', 't') != 't' or str(data.get('qwen_size', 2)) != '2'):
-            self.send_error(400, 'This alpha includes YOLO tiny and Qwen 2B only')
+          unavailable = unsupported_settings(data)
+          if unavailable:
+            self.send_refusal(unavailable)
             return
           # keep userid and key if "True"
           if data["userID"] == True: data["userID"] = global_settings.userID
