@@ -1419,6 +1419,32 @@
     #alertsOnlyCheckbox { width: 18px; height: 18px; accent-color: var(--sage-strong); cursor: pointer; }
     .modal-empty { color: var(--paper-muted); font-size: .88rem; }
     .table-caption { margin: 10px 0 0; color: var(--paper-muted); font-size: .8rem; line-height: 1.5; }
+    .stream-badge { position: absolute; top: 10px; right: 10px; z-index: 2; padding: 3px 9px; border-radius: 999px; background: rgba(16,26,28,.72); color: var(--paper-muted); font-size: .7rem; font-weight: 700; letter-spacing: .06em; pointer-events: none; }
+    .stream-badge-live { background: rgba(194,222,207,.92); color: var(--ink); }
+    .event-image-actions button { width: auto !important; min-width: 44px; display: inline-flex !important; align-items: center; gap: 6px; padding: 0 12px !important; }
+    .event-image-actions .action-label { font-size: .78rem; font-weight: 650; white-space: nowrap; }
+    .confirm-body { margin: 4px 0 0; color: var(--paper); font-size: .92rem; line-height: 1.55; }
+    #confirmAction { border: 0; border-radius: 10px; background: var(--paper); color: var(--ink); padding: 10px 16px; font-weight: 650; cursor: pointer; min-height: 44px; }
+    #confirmAction:hover { background: var(--sage-strong); }
+    #confirmAction.confirm-danger { background: var(--danger); color: var(--ink); }
+    #confirmAction.confirm-danger:hover { background: #efa39d; }
+    #confirmAction:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+    .storage-warning { display: grid; gap: 10px; margin: 14px 0; padding: 12px 14px; border: 1px solid rgba(231,179,93,.5); border-radius: 12px; background: rgba(231,179,93,.1); color: var(--paper); font-size: .88rem; line-height: 1.5; }
+    .storage-warning-action { justify-self: start; border: 1px solid var(--brass); border-radius: 9px; background: transparent; color: var(--brass); padding: 8px 12px; font-weight: 650; cursor: pointer; min-height: 40px; }
+    .storage-warning-action:hover { background: rgba(231,179,93,.16); }
+    /* Alert builder: household-first classes, live rule sentence. */
+    .alert-group-label { display: block; font-weight: 650; margin-bottom: 8px; color: var(--paper); }
+    .common-classes { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+    .common-classes label, #checkboxContainerMore label { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: .88rem; }
+    .common-classes label:has(input:checked), #checkboxContainerMore label:has(input:checked) { border-color: var(--sage-strong); background: rgba(194,222,207,.12); }
+    .common-classes input, #checkboxContainerMore input { accent-color: var(--sage-strong); width: 16px; height: 16px; }
+    .more-classes { margin-top: 10px; }
+    .more-classes summary { cursor: pointer; color: var(--paper-muted); font-size: .85rem; padding: 6px 0; }
+    #checkboxContainerMore { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; max-height: 180px; overflow-y: auto; margin-top: 8px; padding: 2px; }
+    .alert-inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .88rem; }
+    .alert-inline-row input[type=number] { width: 72px; text-align: center; }
+    #alertSentence { width: 90%; margin: 16px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--ink-soft); color: var(--sage-strong); font-size: .88rem; line-height: 1.5; }
+    #alertModal input[type=checkbox] { accent-color: var(--sage-strong); }
     #alertsContainer { overflow-x: auto; }
     #alertsContainer table { color: var(--paper); }
     #alertsContainer th { background: transparent !important; border-bottom: 1px solid var(--line-strong) !important; color: var(--paper-muted) !important; font-size: .78rem; font-weight: 650; letter-spacing: .02em; padding: 8px 10px !important; }
@@ -1663,7 +1689,10 @@
     <div class="ledger-row"><span>Alert rules</span><strong id="notificationState">Checking…</strong></div>
     <div class="ledger-row"><span>Review date</span><strong id="reviewState">Checking…</strong></div>
     <p id="pipelineDetail" role="status" class="ledger-lead"></p>
-    <p id="storageWarning" role="alert" class="ledger-lead" hidden></p>
+    <div id="storageWarning" role="alert" class="storage-warning" hidden>
+      <span id="storageWarningText"></span>
+      <button type="button" class="storage-warning-action" onclick="revealStorageControl()">Adjust storage limit</button>
+    </div>
     <section class="household-block" aria-labelledby="household-heading">
       <h3 id="household-heading">Household</h3>
       <p class="ledger-lead">Name people from their journal events; recognized names appear on future events and notifications. Faces never leave this Mac.</p>
@@ -1810,6 +1839,20 @@
       </div>
     </div>
 
+    <div id="confirmModal" class="modal">
+      <div class="modal-content" style="max-width: 420px;">
+        <div class="modal-header">
+          <h3 id="confirmTitle">Are you sure?</h3>
+          <span class="close" onclick="resolveConfirm(false)">&times;</span>
+        </div>
+        <p id="confirmBody" class="confirm-body"></p>
+        <div class="form-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
+          <button type="button" class="modal-quiet" onclick="resolveConfirm(false)">Cancel</button>
+          <button type="button" id="confirmAction" onclick="resolveConfirm(true)">Confirm</button>
+        </div>
+      </div>
+    </div>
+
     <div id="enrollModal" class="modal">
       <div class="modal-content" style="max-width: 400px;">
         <div class="modal-header">
@@ -1833,46 +1876,25 @@
     <div id="alertModal" class="modal">
       <div class="modal-content" style="max-width: 400px;">
         <div class="modal-header">
-          <h3>Add New Alert</h3>
+          <h3>Add Alert <span id="alertModalCamera" class="modal-subject"></span></h3>
           <span class="close" onclick="closeAlertModal()">&times;</span>
         </div>
         <form id="alertForm" onsubmit="addAlert(event)" style="display: flex; flex-direction: column; align-items: center;">
-          <div class="form-group checkbox-group" style="width: 90%; text-align: center;">
-          <div class="form-group" style="width: 90%; text-align: center; margin-bottom: 15px;">
-          <label style="font-weight: 600; margin-bottom: 10px; display: block;">
-            <span class="tooltip">
-              Description & Threshold (Optional)
-              <span class="tooltip-icon">?</span>
-              <span class="tooltiptext">
-                Alert when an object of your description is seen (must select an object type and have CLIP enabled).
-              </span>
-            </span>
-          </label>
-
-            <div style="display: flex; justify-content: center; gap: 10px; align-items: center;">
-              <input type="text" id="alertDesc" name="desc" placeholder="Description"
-                style="width: 180px; padding: 4px; text-align: center;">
-
-              <input type="number" id="alertThreshold" name="threshold" min="1"
-                placeholder="Threshold %"
-                style="width: 100px; padding: 4px; text-align: center;">
-            </div>
+          <div class="form-group checkbox-group" style="width: 90%;">
+            <label class="alert-group-label">Watch for</label>
+            <div id="checkboxContainer" class="checkbox-container common-classes"></div>
+            <details class="more-classes">
+              <summary>More object types</summary>
+              <div id="checkboxContainerMore" class="checkbox-container"></div>
+            </details>
           </div>
-            <div id="checkboxContainer" class="checkbox-container" style="display: grid; grid-template-columns: auto auto; gap: 8px 16px; max-height: 200px; overflow-y: auto; margin: 0 auto; padding: 8px; justify-content: center;"></div>
-          </div>
-          <div id="timeWindowSection" class="form-group" style="width: 90%; text-align: center; margin-top: 15px;">
-            <label style="font-weight: 600; margin-bottom: 10px; display: block;">Time Window (Optional)</label>
-            <div style="margin-bottom: 10px;">
-              <label for="maxCount">Trigger if there are</label>
-              <input type="number" id="maxCount" name="max" min="1" placeholder="1"
-                  style="width: 80px; margin: 0 6px; text-align: center; display: inline-block;">
-              <span>objects detected</span>
-            </div>
-            
-            <div>
-              <label for="windowMinutes">within this time window</label>
-              <input type="number" id="windowMinutes" name="window" min="1" placeholder="1" 
-                  style="width: 80px; margin: 0 6px; text-align: center; display: inline-block;">
+          <div id="timeWindowSection" class="form-group" style="width: 90%; margin-top: 15px;">
+            <label class="alert-group-label">How many, how fast</label>
+            <div class="alert-inline-row">
+              <label for="maxCount">Trigger if more than</label>
+              <input type="number" id="maxCount" name="max" min="1" placeholder="1">
+              <span>seen within</span>
+              <input type="number" id="windowMinutes" name="window" min="1" placeholder="1">
               <span>minutes</span>
             </div>
           </div>
@@ -1917,7 +1939,16 @@
             </div>
           </div>
 
-          <div class="form-actions" style="display: flex; justify-content: center; gap: 10px; margin-top: 20px; width: 100%;">
+          <details class="more-classes" style="width: 90%;">
+            <summary>Advanced: describe what to look for</summary>
+            <p class="setup-hint" style="color: var(--paper-muted);">Alerts on a written description of the object (needs an object type selected and OpenCLIP Search enabled in Global Settings).</p>
+            <div class="alert-inline-row">
+              <input type="text" id="alertDesc" name="desc" placeholder="e.g. red delivery van" style="width: 180px;">
+              <input type="number" id="alertThreshold" name="threshold" min="1" placeholder="Match %" style="width: 90px;">
+            </div>
+          </details>
+          <p id="alertSentence" role="status" aria-live="polite"></p>
+          <div class="form-actions" style="display: flex; justify-content: center; gap: 10px; margin-top: 12px; width: 100%;">
             <button type="button" onclick="closeAlertModal()">Cancel</button>
             <button type="submit">Save Alert</button>
           </div>
@@ -2063,12 +2094,14 @@
         }, 5000);
     }
 
+    // Household-first: the things a home camera actually watches for lead;
+    // the rest of the model's vocabulary waits behind a disclosure.
+    const COMMON_CLASS_IDS = [0, 2, 15, 16, 1, 7]; // person, car, cat, dog, bicycle, truck
     function initAlertCheckboxes() {
-        const container = document.getElementById('checkboxContainer');
-        container.innerHTML = '';
-        
-        for (let i = 0; i < 80; i++) { // todo unhardcode 80 for other models
-            if (!classLabels[i]) continue;  // skip useless classes
+        const common = document.getElementById('checkboxContainer');
+        const more = document.getElementById('checkboxContainerMore');
+        common.innerHTML = ''; more.innerHTML = '';
+        const add = (i, target) => {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = i;
@@ -2078,8 +2111,30 @@
             label.htmlFor = 'class_' + i;
             label.textContent = classLabels[i];
             label.prepend(checkbox);
-            container.appendChild(label);
+            target.appendChild(label);
+        };
+        COMMON_CLASS_IDS.forEach(i => classLabels[i] && add(i, common));
+        for (let i = 0; i < 80; i++) { // todo unhardcode 80 for other models
+            if (!classLabels[i] || COMMON_CLASS_IDS.includes(i)) continue;
+            add(i, more);
         }
+    }
+
+    function updateAlertSentence() {
+        const target = document.getElementById('alertSentence');
+        const form = document.getElementById('alertForm');
+        if (!target || !form) return;
+        const picked = [...form.querySelectorAll('input[name=class_ids]:checked')].map(cb => classLabels[cb.value]);
+        if (!picked.length) { target.textContent = 'Choose at least one thing to watch for.'; return; }
+        const what = picked.length <= 3 ? picked.join(', ') : `${picked.slice(0, 2).join(', ')} and ${picked.length - 2} more`;
+        const max = parseInt(form.querySelector('#maxCount').value) || 1;
+        const minutes = parseInt(form.querySelector('#windowMinutes').value) || 1;
+        const from = form.querySelector('#scheduleFrom').value;
+        const to = form.querySelector('#scheduleTo').value;
+        const days = [...form.querySelectorAll('input[name=days]:checked')].length;
+        const when = (from && to) ? ` between ${from} and ${to}` : '';
+        const daysText = days === 7 ? '' : days === 0 ? ' (no days selected!)' : ` on ${days} days a week`;
+        target.textContent = `Notify me when more than ${max} ${what} ${max === 1 ? 'is' : 'are'} seen within ${minutes} minute${minutes === 1 ? '' : 's'}${when}${daysText}.`;
     }
 
     function fetchAlerts() {
@@ -2378,10 +2433,14 @@
       startAutoRefresh();
     });
 
-    function resetCounts() {
+    async function resetCounts() {
       if (!currentAlertsCamera) return;
-      
-      if (!confirm("Are you sure you want to reset the counts for this camera?")) return;
+
+      if (!(await askConfirm({
+        title: 'Reset object counts?',
+        body: `Counting for ${currentAlertsCamera} starts over from zero. Recordings and the journal are not affected.`,
+        action: 'Reset counts', danger: true,
+      }))) return;
       fetch(`/reset_counts?cam=${encodeURIComponent(currentAlertsCamera)}`)
         .then(res => res.json())
         .then(() => {
@@ -2414,8 +2473,12 @@
     }
 
     function openAlertModal() {
+      document.getElementById("alertModalCamera").textContent = currentAlertsCamera || '';
       document.getElementById("alertModal").style.display = "flex";
+      updateAlertSentence();
     }
+    document.getElementById('alertForm').addEventListener('input', updateAlertSentence);
+    document.getElementById('alertForm').addEventListener('change', updateAlertSentence);
 
     function closeAlertModal() {
       document.getElementById("alertModal").style.display = "none";
@@ -3049,6 +3112,16 @@
       const isToday = currentStreamDate === new Date().toLocaleDateString('en-CA');
       const playlistName = (isToday && !isReplay) ? 'live.m3u8' : 'stream.m3u8';
       const streamUrl = `${baseUrl}/${encoded}/streams/${currentStreamDate}/${playlistName}`;
+
+      // State before decoration: the well says whether it is the live edge or a replay.
+      const well = video.closest('.video-container');
+      if (well) {
+        let badge = well.querySelector('.stream-badge');
+        if (!badge) { badge = document.createElement('span'); badge.className = 'stream-badge'; well.appendChild(badge); }
+        const live = playlistName === 'live.m3u8';
+        badge.textContent = live ? 'LIVE' : 'REPLAY';
+        badge.classList.toggle('stream-badge-live', live);
+      }
       
       const session = {
         video: video,
@@ -3171,7 +3244,11 @@
     }
 
     async function deleteCamera(cam) {
-      if (!confirm(`Are you sure you want to delete ${cam}?`)) return;
+      if (!(await askConfirm({
+        title: `Remove ${cam}?`,
+        body: `This deletes ${cam}'s recordings, events, and settings from this Mac. It cannot be undone. Other cameras are not affected.`,
+        action: 'Delete camera', danger: true,
+      }))) return;
       cleanupCameraStream(cam);
       const res = await fetch(`/delete_camera?cam_name=${encodeURIComponent(cam)}`);
       if (res.ok) {
@@ -3187,7 +3264,7 @@
         const data = await res.json();
         const input = document.getElementById('maxStorageInput');
         const warning = document.getElementById('storageWarning');
-        warning.textContent = data.warning || '';
+        document.getElementById('storageWarningText').textContent = data.warning || '';
         warning.hidden = !data.warning;
         if (input && data.max_gb !== undefined && !input.dataset.dirty && document.activeElement !== input) {
           input.value = data.max_gb;
@@ -3204,7 +3281,11 @@
         alert("Please enter a valid number");
         return;
       }
-      if (!confirm(`Set max storage to ${newVal} GB?`)) return;
+      if (!(await askConfirm({
+        title: `Keep up to ${newVal} GB?`,
+        body: 'Recordings from older days beyond this limit are removed, oldest first. Today\'s recording is always kept.',
+        action: 'Save limit',
+      }))) return;
       try {
         const response = await fetch(`/set_max_storage?max=${newVal}`);
         if (!response.ok) throw new Error();
@@ -3841,25 +3922,25 @@
       Object.entries(settings).forEach(([key, value]) => {
 
       const labelMap = {
-        "use_clip": "OpenCLIP Search",
-        "use_face": "Face Detection (Experimental)",
-        "model_size": "YOLOv9 Model",
-        "model_res": "YOLOv9 Resolution",
-        "use_qwen": "Local AI event descriptions (Qwen3-VL)",
-        "qwen_size": "Qwen3VL Size",
+        "use_clip": "Search by description",
+        "use_face": "Face search (experimental)",
+        "model_size": "Detection model",
+        "model_res": "Detection detail",
+        "use_qwen": "AI event descriptions",
+        "qwen_size": "Description model",
         "userID": "User ID",
         "key": "Key"
         };
 
       const tooltipMap = {
-        "use_clip": "Enables searching events using natural language or image similarity with OpenCLIP.",
-        "use_face": "Enables searching detected people using a face image.",
-        "model_size": "YOLOv9 Detection model size (tiny, small, medium, compact, extended)",
-        "model_res": "Sets the input resolution for YOLOv9 detection.",
-        "use_qwen": "Describes event images on this Mac for the journal and local notifications. No account required. Downloads model files on first use; images stay local. AI descriptions may be inaccurate.",
-        "qwen_size": "Select the Qwen3VL model size (2B or 4B parameters).",
-        "userID": "Your account user ID for notifications and remote config.",
-        "key": "Secret key for encrypting event clips."
+        "use_clip": "Search your events with plain language (\"red car yesterday\") or a similar image. Runs on this Mac.",
+        "use_face": "Find events by face image. Household recognition on journal events works independently of this.",
+        "model_size": "Larger models spot objects more reliably but use more of this Mac. This build includes Tiny.",
+        "model_res": "Higher detail helps with small or distant objects, at more processing cost.",
+        "use_qwen": "Writes a short sentence about each event for the journal and notifications. Runs on this Mac; images stay local. Descriptions may be inaccurate.",
+        "qwen_size": "The larger model writes better descriptions and uses more memory. This build includes 2B.",
+        "userID": "Optional cloud notifications: only needed to receive alerts away from home. Saving sends this off the Mac.",
+        "key": "Optional cloud notifications: encrypts event clips before upload. Saving sends this off the Mac."
       };
 
         const wrapper = document.createElement("div");
@@ -3986,10 +4067,11 @@
       });
       
       if ((payload.userID && payload.userID !== true) || (payload.key && payload.key !== true)) {
-        if (!confirm("Warning: Your User ID and Key will be sent over the network.\n\n" +
-          "For your security, avoid entering these on public or unsecured WiFi networks. " +
-          "It is recommended to configure this over localhost or a trusted private network.\n\n" +
-          "Do you want to continue?")) {
+        if (!(await askConfirm({
+          title: 'Send account details off this Mac?',
+          body: 'Saving a User ID and Key enables optional cloud notifications: those two values are sent over the network. Your video and recordings still stay on this Mac. Leave these fields empty to keep everything local.',
+          action: 'Send and save',
+        }))) {
           return;
         }
       }
@@ -4054,16 +4136,16 @@
         info.append(pending);
       }
       const actions = document.createElement('div'); actions.className = 'event-image-actions';
-      const action = (name, icon, callback) => {
+      const action = (name, icon, callback, short) => {
         const button = document.createElement('button'); button.type = 'button'; button.title = name;
         button.setAttribute('aria-label', name);
-        button.innerHTML = `<svg aria-hidden="true"><use href="#${icon}"></use></svg>`;
+        button.innerHTML = `<svg aria-hidden="true"><use href="#${icon}"></use></svg><span class="action-label">${short}</span>`;
         button.addEventListener('click', callback); actions.append(button);
         return button;
       };
-      if (typeof img.score === 'number') action('Search Similar', 'icon-magnify', () => searchWithImage(img.url));
-      action('Name this person', 'icon-person', () => openEnrollModal(img.url));
-      const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder));
+      if (typeof img.score === 'number') action('Search Similar', 'icon-magnify', () => searchWithImage(img.url), 'Similar');
+      action('Name this person', 'icon-person', () => openEnrollModal(img.url), 'Name');
+      const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder), 'Play');
       play.disabled = !Number.isFinite(img.playback_offset);
       if (play.disabled) {
         play.title = 'Recording for this event is unavailable';
@@ -4071,7 +4153,7 @@
         unavailable.textContent = 'Recording unavailable';
         info.append(document.createElement('br'), unavailable);
       }
-      const all = action('Play all cameras', 'icon-play-all', () => playAllCamerasAtTime(img.captured_at, img.folder));
+      const all = action('Play all cameras', 'icon-play-all', () => playAllCamerasAtTime(img.captured_at, img.folder), 'All cams');
       all.disabled = !Number.isFinite(img.captured_at);
       card.append(preview, info, actions);
       return card;
@@ -4206,6 +4288,34 @@
     pollVisible(fetchCameras, 5000);
     refreshEngineStatus();
     pollVisible(refreshEngineStatus, 10000);
+    // In-world confirmation: states what is kept and what is destroyed instead
+    // of a native confirm() breaking the frame at the scariest moments.
+    let confirmResolver = null;
+    function askConfirm({title, body, action = 'Confirm', danger = false}) {
+      return new Promise(resolve => {
+        confirmResolver = resolve;
+        document.getElementById('confirmTitle').textContent = title;
+        document.getElementById('confirmBody').textContent = body;
+        const button = document.getElementById('confirmAction');
+        button.textContent = action;
+        button.classList.toggle('confirm-danger', danger);
+        document.getElementById('confirmModal').style.display = 'flex';
+        button.focus();
+      });
+    }
+    function revealStorageControl() {
+      const setup = document.getElementById('cameraSetup');
+      setup.open = true;
+      const input = document.getElementById('maxStorageInput');
+      input.scrollIntoView({block: 'center'});
+      input.focus();
+    }
+
+    function resolveConfirm(answer) {
+      document.getElementById('confirmModal').style.display = 'none';
+      if (confirmResolver) { confirmResolver(answer); confirmResolver = null; }
+    }
+
     let enrollImageUrl = null;
     function openEnrollModal(imageUrl) {
       enrollImageUrl = imageUrl;
@@ -4267,7 +4377,11 @@
           remove.setAttribute('aria-label', `Remove ${member.name} from household`);
           remove.innerHTML = '<svg aria-hidden="true"><use href="#icon-bin"></use></svg>';
           remove.addEventListener('click', async () => {
-            if (!confirm(`Forget ${member.name}'s enrolled face samples? Past journal labels stay.`)) return;
+            if (!(await askConfirm({
+              title: `Forget ${member.name}?`,
+              body: `${member.name}'s enrolled face samples are deleted from this Mac and future events will no longer be matched to them. Names already written in the journal stay.`,
+              action: 'Forget face', danger: true,
+            }))) return;
             const response = await fetch('/household_delete?id=' + encodeURIComponent(member.id));
             if (response.ok) { announce(`${member.name} removed.`); loadHousehold(); }
             else announce('Could not remove that person.', true);
