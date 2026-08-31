@@ -27,3 +27,27 @@ class NativeSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, CLEARCAM_MODEL_DIR=folder):
             with self.assertRaisesRegex(RuntimeError, 'not included'):
                 model_asset('https://example.invalid/model')
+
+    def test_read_only_bundle_model_is_copied_somewhere_writable(self):
+        """tinygrad opens weights O_RDWR; a translocated bundle is read-only."""
+        import hashlib, stat
+        url = 'https://example.invalid/weights.gguf'
+        with tempfile.TemporaryDirectory() as models, tempfile.TemporaryDirectory() as cache:
+            bundled = Path(models) / hashlib.md5(url.encode()).hexdigest()
+            bundled.write_bytes(b'weights')
+            os.chmod(bundled, stat.S_IRUSR)
+            with patch.dict(os.environ, CLEARCAM_MODEL_DIR=models, XDG_CACHE_HOME=cache):
+                usable = model_asset(url)
+                self.assertNotEqual(usable, bundled)
+                self.assertTrue(os.access(usable, os.W_OK))
+                self.assertEqual(usable.read_bytes(), b'weights')
+                self.assertEqual(model_asset(url), usable)  # reuses the copy
+
+    def test_writable_bundle_model_is_used_in_place(self):
+        import hashlib
+        url = 'https://example.invalid/weights.gguf'
+        with tempfile.TemporaryDirectory() as models:
+            bundled = Path(models) / hashlib.md5(url.encode()).hexdigest()
+            bundled.write_bytes(b'weights')
+            with patch.dict(os.environ, CLEARCAM_MODEL_DIR=models):
+                self.assertEqual(model_asset(url), bundled)

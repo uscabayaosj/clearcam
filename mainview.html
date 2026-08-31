@@ -2550,23 +2550,31 @@
         }
       }
       
-      fetch('/list_days')
-        .then(res => res.json())
-        .then(dates => {
+      // On a brand-new install the page loads before the first recording
+      // segment exists; keep retrying quietly until a date appears.
+      let datesLoaded = false;
+      async function loadAvailableDates() {
+        if (datesLoaded) return;
+        try {
+          const dates = await (await fetch('/list_days')).json();
           if (dates && dates.length > 0) {
+            datesLoaded = true;
             populateDateDropdown(dates, dateSelect, false);
             populateDateDropdown(dates, eventDateFilter, true);
+            loadEventImages(false);
           } else {
-            dateSelect.innerHTML = '<option value="">No dates available</option>';
-            eventDateFilter.innerHTML = '<option value="">No dates available</option>';
+            dateSelect.innerHTML = '<option value="">Waiting for the first recording…</option>';
+            eventDateFilter.innerHTML = '<option value="">Waiting for the first recording…</option>';
           }
-        })
-        .catch(err => {
+        } catch (err) {
           console.error('Failed to load dates:', err);
           dateSelect.innerHTML = '<option value="">Could not load dates</option>';
           eventDateFilter.innerHTML = '<option value="">Could not load dates</option>';
           document.getElementById('journalRetry').hidden = false;
-        });
+        }
+      }
+      loadAvailableDates();
+      pollVisible(loadAvailableDates, 15000);
       
       // Stream date dropdown listener
       dateSelect.addEventListener('change', function() {

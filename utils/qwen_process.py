@@ -32,17 +32,21 @@ class QwenProcess:
         try:
             self.process.stdin.write((json.dumps(request) + '\n').encode())
             self.process.stdin.flush()
+            # Inactivity timeout: the worker heartbeats every 20s while loading
+            # or generating, so slow hardware is fine; only true silence kills.
             deadline = time.monotonic() + self.timeout
+            absolute_deadline = time.monotonic() + 1800
             pending = b''
             with selectors.DefaultSelector() as selector:
                 selector.register(self.process.stdout, selectors.EVENT_READ)
                 while True:
-                    remaining = deadline - time.monotonic()
+                    remaining = min(deadline, absolute_deadline) - time.monotonic()
                     if remaining <= 0 or not selector.select(remaining):
                         raise TimeoutError('Local Qwen worker exceeded its time limit')
                     chunk = os.read(self.process.stdout.fileno(), 65536)
                     if not chunk:
                         raise RuntimeError('Local Qwen worker stopped unexpectedly')
+                    deadline = time.monotonic() + self.timeout
                     pending += chunk
                     while b'\n' in pending:
                         line, pending = pending.split(b'\n', 1)
@@ -73,14 +77,28 @@ class QwenProcess:
 
 def serve():
     import contextlib
+    import threading
     import traceback
     model = None
     model_key = None
+    real_stdout = sys.stdout  # redirect_stdout blocks must not swallow protocol lines
+    reply_lock = threading.Lock()
 
     def reply(payload):
-        print(json.dumps(payload), flush=True)
+        with reply_lock:
+            real_stdout.write(json.dumps(payload) + '\n')
+            real_stdout.flush()
 
     for line in sys.stdin:
+        heartbeat_stop = threading.Event()
+
+        def heartbeat():
+            # Model load and generation can be silent for minutes on slower
+            # Macs; periodic liveness keeps the parent's inactivity timeout fed.
+            while not heartbeat_stop.wait(20):
+                reply({'state': 'working'})
+
+        threading.Thread(target=heartbeat, daemon=True).start()
         try:
             request = json.loads(line)
             key = (request['size'], tuple(request['res']))
@@ -103,8 +121,10 @@ def serve():
                     prompt=request['prompt'], image=image,
                     reset=request['reset'], max_tokens=request['max_tokens'], quiet=True,
                 ).strip()
+            heartbeat_stop.set()
             reply({'description': description})
         except Exception:
+            heartbeat_stop.set()
             reply({'error': traceback.format_exc()})
 
 
