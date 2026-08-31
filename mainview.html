@@ -1246,6 +1246,7 @@
     }
 
     * { box-sizing: border-box; }
+    button { -webkit-appearance: none; appearance: none; } /* WKWebView paints native bezels on unstyled buttons */
     html { background: var(--ink); }
     body {
       min-width: 320px;
@@ -1419,6 +1420,17 @@
     .more-classes summary { cursor: pointer; color: var(--paper-muted); font-size: .85rem; padding: 6px 0; }
     #checkboxContainerMore { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; max-height: 180px; overflow-y: auto; margin-top: 8px; padding: 2px; }
     .alert-inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .88rem; }
+    #alertModal .alert-inline-row label { display: inline-flex; margin: 0; white-space: nowrap; }
+    /* One primary per dialog: submit is solid paper, cancel is quiet. */
+    .modal .form-actions button[type=submit] { background: var(--paper) !important; color: var(--ink) !important; border: 0 !important; border-radius: 10px !important; font-weight: 650; }
+    .modal .form-actions button[type=submit]:hover { background: var(--sage-strong) !important; }
+    .modal .form-actions button[type=button]:not(.modal-add):not(.zone-clear):not(#confirmAction) { background: transparent !important; color: var(--paper) !important; border: 1px solid var(--line-strong) !important; border-radius: 10px !important; font-weight: 600; }
+    .modal .form-actions button[type=button]:not(.modal-add):not(.zone-clear):not(#confirmAction):hover { background: var(--ink-soft) !important; }
+    .alert-group-optional { font-weight: 400; color: var(--paper-muted); font-size: .8rem; }
+    .day-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .day-chips label { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: .85rem; }
+    .day-chips label:has(input:checked) { border-color: var(--sage-strong); background: rgba(194,222,207,.12); }
+    .day-chips input { accent-color: var(--sage-strong); width: 15px; height: 15px; }
     .alert-inline-row input[type=number] { width: 72px; text-align: center; }
     #alertSentence { width: 90%; margin: 16px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--ink-soft); color: var(--sage-strong); font-size: .88rem; line-height: 1.5; }
     #alertModal input[type=checkbox] { accent-color: var(--sage-strong); }
@@ -1517,7 +1529,11 @@
     .rail-button { width: 44px; height: 44px; }
     .modal { padding: 16px; overflow-y: auto; }
     .modal-content { width: min(100%, 680px) !important; max-height: calc(100dvh - 32px); overflow-y: auto; margin: auto; }
-    .modal .close, .close-preview { display: grid; place-items: center; width: 44px; height: 44px; min-width: 44px; padding: 0; border: 0; background: transparent; color: var(--paper); cursor: pointer; }
+    /* appearance:none: WebKit keeps the native push-button bezel on
+       transparent-background buttons, which reads as a stray paper block. */
+    .modal .close, .close-preview { appearance: none; -webkit-appearance: none; display: grid; place-items: center; width: 44px; height: 44px; min-width: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent !important; color: var(--paper); font-size: 22px; line-height: 1; cursor: pointer; }
+    .modal .close:hover, .close-preview:hover { background: var(--ink-soft) !important; }
+    .modal .close:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
     #settingsContainer > div { flex-wrap: wrap; }
     #settingsContainer label { min-width: min(100%, 220px); }
     #settingsContainer input, #settingsContainer select { max-width: 100%; }
@@ -1861,7 +1877,7 @@
     </div>
 
     <div id="alertModal" class="modal">
-      <div class="modal-content" style="max-width: 400px;">
+      <div class="modal-content" style="max-width: 520px;">
         <div class="modal-header">
           <h3>Add Alert <span id="alertModalCamera" class="modal-subject"></span></h3>
           <span class="close" onclick="closeAlertModal()">&times;</span>
@@ -1886,43 +1902,22 @@
             </div>
           </div>
 
-          <div class="form-group" style="width: 90%; text-align: center;">
-            <label style="font-weight: 600; margin-bottom: 10px; display: block;">Schedule (Optional)</label>
-            <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-              <div>
-                <label for="scheduleFrom">From</label><br>
-                <input type="time" id="scheduleFrom" name="schedule_from" step="60" style="text-align: center;">
-              </div>
-              <div>
-                <label for="scheduleTo">To</label><br>
-                <input type="time" id="scheduleTo" name="schedule_to" step="60" style="text-align: center;">
-              </div>
+          <div class="form-group" style="width: 90%; margin-top: 15px;">
+            <label class="alert-group-label">When <span class="alert-group-optional">— all the time unless you narrow it</span></label>
+            <div class="alert-inline-row">
+              <label for="scheduleFrom">From</label>
+              <input type="time" id="scheduleFrom" name="schedule_from" step="60">
+              <label for="scheduleTo">to</label>
+              <input type="time" id="scheduleTo" name="schedule_to" step="60">
             </div>
-          </div>
-
-          <div class="form-group" style="width: 90%; text-align: center;">
-            <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 5px auto 0 auto; width: 120px;">
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="0" checked> Mon
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="1" checked> Tue
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="2" checked> Wed
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="3" checked> Thu
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="4" checked> Fri
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="5" checked> Sat
-              </label>
-              <label style="display:flex; align-items:center; gap:8px;">
-                <input type="checkbox" name="days" value="6" checked> Sun
-              </label>
+            <div class="day-chips">
+              <label><input type="checkbox" name="days" value="0" checked> Mon</label>
+              <label><input type="checkbox" name="days" value="1" checked> Tue</label>
+              <label><input type="checkbox" name="days" value="2" checked> Wed</label>
+              <label><input type="checkbox" name="days" value="3" checked> Thu</label>
+              <label><input type="checkbox" name="days" value="4" checked> Fri</label>
+              <label><input type="checkbox" name="days" value="5" checked> Sat</label>
+              <label><input type="checkbox" name="days" value="6" checked> Sun</label>
             </div>
           </div>
 
