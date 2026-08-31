@@ -112,6 +112,9 @@ class Qwen3VL():
       self.vis(lang=self.lang, image=image, start_pos=Variable("pos",0,self.max_context).bind(self.start_pos))
       self.start_pos += ((self.res[0] * self.res[1]) // (32*32)) + 8 # todo unhardcode
     if prompt is None: return
+    # Text-only generation: the prefill position variable's minimum is 1, so a
+    # fresh context must not bind position 0 (image runs always advance past it).
+    if image is None and self.start_pos == 0: self.start_pos = 1
     prompt = "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
     prompt = self.tok.encode(prompt)
     prompt_len = len(prompt)

@@ -49,6 +49,22 @@ class LocalDescriptions:
         except queue.Full:
             return False
 
+    def submit_summary(self, prompt, on_result):
+        """Text-only generation through the same single-consumer queue.
+
+        on_result(text or None) always runs — with the model's text when
+        generation succeeds, or None so the caller can use its fallback.
+        """
+        if not self.enabled:
+            on_result(None)
+            return False
+        try:
+            self.jobs.put_nowait(('summary', prompt, on_result))
+            return True
+        except queue.Full:
+            on_result(None)
+            return False
+
     def retry_saved(self, camera_root):
         """Recover a bounded set of missing descriptions without replaying alerts."""
         if not self.enabled:
@@ -72,6 +88,27 @@ class LocalDescriptions:
     def _run(self):
         while True:
             path, camera_name, notify = self.jobs.get()
+            if path == 'summary':
+                prompt, on_result = camera_name, notify
+                try:
+                    if self.model is None or self.model_size != self.size:
+                        if self.model is not None and hasattr(self.model, 'close'):
+                            self.model.close()
+                        self.state = 'loading_model'
+                        self.model = self.model_factory(size=f'{self.size}B', res=(448, 448))
+                        self.model_size = self.size
+                    self.state = 'describing'
+                    text = self.model.generate(prompt=prompt, image_path=None, reset=True,
+                                               max_tokens=220, quiet=True, on_state=self._set_state).strip()
+                    self.state = 'ready'
+                    on_result(text or None)
+                except Exception:
+                    logging.getLogger(__name__).exception('Local summary generation failed')
+                    self.state = 'ready'
+                    on_result(None)
+                finally:
+                    self.jobs.task_done()
+                continue
             try:
                 if not self.enabled or not path.exists():
                     continue

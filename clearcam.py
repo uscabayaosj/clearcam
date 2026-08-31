@@ -42,6 +42,7 @@ import zlib
 from utils.db import db
 from utils import keychain
 from utils import household
+from utils import summaries
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description
 import multiprocessing
@@ -75,6 +76,46 @@ notifications_muted_until = 0.0  # wall clock; 0 means notifications are on
 
 def notifications_muted():
   return time.time() < notifications_muted_until
+
+
+def summary_config():
+  stored = database.run_get('summary', 'config')
+  return stored if isinstance(stored, dict) else dict(enabled=False, time=summaries.DEFAULT_TIME, last_run=0)
+
+
+def run_summary_if_due():
+  """Called from the main loop; generation itself runs off-loop."""
+  config = summary_config()
+  if not summaries.is_due(config): return
+  now = time.time()
+  window_start = max(config.get('last_run', 0), now - 24 * 3600) or now - 24 * 3600
+  config['last_run'] = now
+  database.run_put('summary', 'config', config)
+
+  def build():
+    try:
+      facts = summaries.collect_window(BASE_DIR / 'cameras', window_start, now)
+      fallback = summaries.deterministic_summary(facts)
+
+      def finish(model_text):
+        if model_text and not summaries.acceptable_summary(model_text):
+          print('Summary model output rejected (degenerate); using template.')
+          model_text = None
+        text = model_text or fallback
+        summaries.write_summary(BASE_DIR, dict(
+            start=window_start, end=now, summary=text, generated=bool(model_text),
+            events=len(facts['events']), model=f'Qwen3-VL' if model_text else 'template'))
+        if not notifications_muted():
+          macos_notifications.send('ClearCam summary', text[:180])
+
+      if facts['events'] and global_settings.use_qwen:
+        local_descriptions.submit_summary(summaries.build_prompt(facts), finish)
+      else:
+        finish(None)
+    except Exception as error:
+      print('Summary generation failed:', error)
+
+  threading.Thread(target=build, daemon=True).start()
 
 
 def _face_regions(frame):
@@ -360,6 +401,7 @@ class VideoCapture:
     while True:
       if time.time() - cam_check >= 5:
         cam_check = time.time()
+        run_summary_if_due()
         new_cams = camera_sources()
         for cam_name in new_cams.keys():
           if type(new_cams[cam_name]) != str: continue # todo find cause
@@ -1132,6 +1174,33 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                     "threshold": alert.threshold,
                 })
             self.send_200(alert_info)
+            return
+
+        if parsed_path.path == '/summary_config':
+            config = summary_config()
+            enabled = query.get('enabled', [None])[0]
+            at = query.get('time', [None])[0]
+            if enabled is not None or at is not None:
+                if enabled is not None: config['enabled'] = str(enabled).lower() == 'true'
+                if at is not None:
+                    try:
+                        summaries.parse_daily_time(at)
+                    except ValueError:
+                        self.send_error(400, 'Time must be HH:MM')
+                        return
+                    config['time'] = at.strip()
+                database.run_put('summary', 'config', config)
+            self.send_200(config)
+            return
+
+        if parsed_path.path == '/summaries':
+            try:
+                count = int(query.get('count', ['7'])[0])
+                if not 1 <= count <= 30: raise ValueError()
+            except ValueError:
+                self.send_error(400, 'count must be 1-30')
+                return
+            self.send_200(summaries.recent_summaries(BASE_DIR, count))
             return
 
         if parsed_path.path == '/pause_notifications':

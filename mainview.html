@@ -1334,6 +1334,11 @@
     .event-pending { display: block; margin-top: 6px; color: var(--muted-on-paper); font-style: italic; }
     .person-chip { display: inline-block; margin-inline-start: 8px; padding: 2px 9px; border-radius: 999px; background: var(--sage-strong); color: var(--ink); font-size: .78rem; font-weight: 650; vertical-align: 2px; }
     .household-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .summary-controls { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; color: var(--paper); font-size: .88rem; }
+    .summary-controls input[type=time] { padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--ink-soft); color: var(--paper); min-height: 40px; }
+    .latest-summary { padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--ink-raised); }
+    .latest-summary small { display: block; margin-bottom: 5px; color: var(--paper-muted); font-size: .75rem; font-weight: 650; letter-spacing: .02em; }
+    .latest-summary p { margin: 0; color: var(--paper); font-size: .88rem; line-height: 1.55; }
     .household-block h3 { margin: 0; font-size: .95rem; font-weight: 650; color: var(--paper); }
     .household-list { list-style: none; margin: 4px 0 0; padding: 0; }
     .household-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--paper); font-size: .88rem; }
@@ -1710,6 +1715,19 @@
       <span id="storageWarningText"></span>
       <button type="button" class="storage-warning-action" onclick="revealStorageControl()">Adjust storage limit</button>
     </div>
+    <section class="household-block" aria-labelledby="summary-heading">
+      <h3 id="summary-heading">Daily summary</h3>
+      <p class="ledger-lead">Once a day, ClearCam writes a short recap of who and what was seen. It is generated on this Mac.</p>
+      <div class="summary-controls">
+        <span class="switch"><input type="checkbox" id="summaryEnabled" aria-label="Daily summary on or off"><span class="switch-knob" aria-hidden="true"></span></span>
+        <label for="summaryTime">at</label>
+        <input type="time" id="summaryTime" step="60" value="21:00">
+      </div>
+      <div id="latestSummary" class="latest-summary" hidden>
+        <small id="latestSummaryWhen"></small>
+        <p id="latestSummaryText"></p>
+      </div>
+    </section>
     <section class="household-block" aria-labelledby="household-heading">
       <h3 id="household-heading">Household</h3>
       <p class="ledger-lead">Name people from their journal events; recognized names appear on future events and notifications. Faces never leave this Mac.</p>
@@ -4405,6 +4423,39 @@
     loadHousehold();
     // The first load can race engine startup; keep the list current quietly.
     pollVisible(loadHousehold, 60000);
+
+    async function loadSummaryState() {
+      try {
+        const config = await (await fetch('/summary_config')).json();
+        document.getElementById('summaryEnabled').checked = !!config.enabled;
+        if (config.time) document.getElementById('summaryTime').value = config.time;
+        const recent = await (await fetch('/summaries?count=1')).json();
+        const box = document.getElementById('latestSummary');
+        if (recent.length) {
+          box.hidden = false;
+          const when = new Date(recent[0].end * 1000);
+          document.getElementById('latestSummaryWhen').textContent =
+            `${when.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'})}, ${when.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})}` +
+            (recent[0].generated ? '' : ' · from counts only');
+          document.getElementById('latestSummaryText').textContent = recent[0].summary;
+        } else box.hidden = true;
+      } catch (_) { /* engine warming up; the poll below retries */ }
+    }
+    async function saveSummaryConfig() {
+      const enabled = document.getElementById('summaryEnabled').checked;
+      const at = document.getElementById('summaryTime').value || '21:00';
+      try {
+        const response = await fetch(`/summary_config?enabled=${enabled}&time=${encodeURIComponent(at)}`);
+        if (!response.ok) throw new Error();
+        announce(enabled ? `Daily summary on — arrives around ${at}.` : 'Daily summary off.');
+      } catch (_) {
+        announce('Summary setting was not saved. Try again.', true);
+      }
+    }
+    document.getElementById('summaryEnabled').addEventListener('change', saveSummaryConfig);
+    document.getElementById('summaryTime').addEventListener('change', saveSummaryConfig);
+    loadSummaryState();
+    pollVisible(loadSummaryState, 60000);
 
     async function refreshLocalAIStatus() {
       const target = document.getElementById('localAIState');

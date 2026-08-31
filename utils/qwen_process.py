@@ -25,8 +25,9 @@ class QwenProcess:
         )
         atexit.register(self.close)
 
-    def generate(self, *, image_path, prompt, reset=True, max_tokens=96, quiet=True, on_state=None):
-        request = dict(size=self.size, res=self.res, image_path=str(image_path),
+    def generate(self, *, image_path=None, prompt, reset=True, max_tokens=96, quiet=True, on_state=None):
+        request = dict(size=self.size, res=self.res,
+                       image_path=str(image_path) if image_path is not None else None,
                        prompt=prompt, reset=reset, max_tokens=max_tokens)
         try:
             self.process.stdin.write((json.dumps(request) + '\n').encode())
@@ -91,12 +92,15 @@ def serve():
                 model_key = key
             reply({'state': 'describing'})
             with contextlib.redirect_stdout(sys.stderr):
-                import cv2
-                frame = cv2.imread(request['image_path'])
-                if frame is None:
-                    raise ValueError('Event image cannot be read')
+                image = None
+                if request['image_path'] is not None:
+                    import cv2
+                    frame = cv2.imread(request['image_path'])
+                    if frame is None:
+                        raise ValueError('Event image cannot be read')
+                    image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 description = model.generate(
-                    prompt=request['prompt'], image=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                    prompt=request['prompt'], image=image,
                     reset=request['reset'], max_tokens=request['max_tokens'], quiet=True,
                 ).strip()
             reply({'description': description})
