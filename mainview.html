@@ -1373,6 +1373,12 @@
     .setup-group h4 { margin: 0 0 10px; font-size: .82rem; font-weight: 650; letter-spacing: .02em; color: var(--muted-on-paper); }
     .setup-group label { font-size: .88rem; color: var(--ink); }
     .setup-hint { margin: 6px 0 0; color: var(--muted-on-paper); font-size: .8rem; line-height: 1.45; }
+    .secret-field { display: flex; gap: 8px; align-items: stretch; }
+    .secret-field input { flex: 1; min-width: 0; }
+    .secret-toggle { flex: 0 0 auto; min-height: 44px; padding: 0 12px; border-radius: 9px; font-weight: 650; cursor: pointer; }
+    #cameraSetup .secret-toggle { border: 1px solid var(--border-on-paper); background: transparent !important; color: var(--ink-on-paper) !important; }
+    .modal .secret-field .secret-toggle { border: 1px solid var(--line-strong); background: transparent; color: var(--paper); }
+    .secret-toggle:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
     .storage-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
     .storage-input { display: flex; align-items: center; gap: 8px; }
     .storage-input input { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -1721,7 +1727,10 @@
           <label for="cameraNameInput">Camera name</label>
           <input id="cameraNameInput" type="text" name="cam_name" placeholder="Living room" maxlength="100" required>
           <label for="cameraSourceInput">Stream address</label>
-          <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://user:password@address/stream1" required autocomplete="off">
+          <div class="secret-field">
+            <input id="cameraSourceInput" type="password" name="src" placeholder="rtsp://user:password@address/stream1" required autocomplete="off">
+            <button type="button" class="secret-toggle" data-reveals="cameraSourceInput" aria-label="Show stream address">Show</button>
+          </div>
           <p class="setup-hint">Include the camera account and password in the address.</p>
           <button type="submit">Add Camera</button>
         </form>
@@ -1783,9 +1792,11 @@
             <label class="zone-field">Detection threshold
                 <input type="number" id="zoneThreshold" value="50" min="0" max="100" step="1"> %
             </label>
-            <label class="zone-field">Change stream address
+            <label class="zone-field" for="zoneSource">Change stream address</label>
+            <div class="secret-field">
                 <input type="password" id="zoneSource" placeholder="rtsp://user:password@address/stream1" autocomplete="off">
-            </label>
+                <button type="button" class="secret-toggle" data-reveals="zoneSource" aria-label="Show stream address">Show</button>
+            </div>
         </div>
         <div class="form-actions zone-actions">
             <button type="button" class="zone-clear" onclick="clearPolygon()">Clear Zone</button>
@@ -4286,6 +4297,18 @@
         button.focus();
       });
     }
+    // Reveal toggles: a long masked rtsp:// address is unreviewable otherwise.
+    document.querySelectorAll('.secret-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const input = document.getElementById(toggle.dataset.reveals);
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        toggle.textContent = show ? 'Hide' : 'Show';
+        toggle.setAttribute('aria-label', (show ? 'Hide' : 'Show') + ' stream address');
+        input.focus();
+      });
+    });
+
     function revealStorageControl() {
       const setup = document.getElementById('cameraSetup');
       setup.open = true;
@@ -4380,6 +4403,8 @@
       }
     }
     loadHousehold();
+    // The first load can race engine startup; keep the list current quietly.
+    pollVisible(loadHousehold, 60000);
 
     async function refreshLocalAIStatus() {
       const target = document.getElementById('localAIState');
