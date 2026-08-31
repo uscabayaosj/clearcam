@@ -572,19 +572,40 @@ class VideoCapture:
 
   def frame_loop(self, cam_name):
     fail_count = 0
+    consecutive_short_sessions = 0
+    session_started = time.time()
     frame_size = self.width[cam_name] * self.height[cam_name] * 3
+
+    def restart_stream():
+      # A stream that dies immediately after starting (bad credentials, camera
+      # auth lockout, session limit) must not be hammered: rapid retries keep
+      # Tapo-style lockouts tripped forever. Back off up to five minutes.
+      nonlocal consecutive_short_sessions, session_started
+      if time.time() - session_started < 30:
+        consecutive_short_sessions += 1
+      else:
+        consecutive_short_sessions = 0
+      backoff = min(15 * (2 ** max(0, consecutive_short_sessions - 2)), 300) if consecutive_short_sessions >= 3 else 0
+      if backoff:
+        print(f"{cam_name} stream keeps failing immediately; waiting {backoff}s before retrying")
+        self.pipeline[cam_name].update(state="recorder_offline", last_frame=None)
+        deadline = time.time() + backoff
+        while time.time() < deadline and not self.stopping.is_set(): time.sleep(1)
+      session_started = time.time()
+      return self._open_ffmpeg(cam_name)
+
     while not self.stopping.is_set() and (BASE_DIR / "cameras" / cam_name).exists():
       try:
         if self.hls_proc[cam_name].poll() is not None:
           self.pipeline[cam_name].update(state="recorder_offline", last_frame=None)
-          self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
+          self.hls_proc[cam_name], self.proc[cam_name] = restart_stream()
           continue
         raw_bytes = self.proc[cam_name].stdout.read(frame_size)
         if len(raw_bytes) != frame_size:
           fail_count += 1
           if fail_count > 5:
             print(f"{cam_name} FFmpeg frame read failed (count={fail_count}), restarting stream")
-            self.hls_proc[cam_name], self.proc[cam_name] = self._open_ffmpeg(cam_name)
+            self.hls_proc[cam_name], self.proc[cam_name] = restart_stream()
             fail_count = 0
           time.sleep(0.5)
           continue  # Never reshape a partial/empty read into an image.

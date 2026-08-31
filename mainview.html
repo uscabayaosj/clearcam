@@ -2932,7 +2932,11 @@
               params.set('coords', JSON.stringify(coords));
           }
           const src = document.getElementById("zoneSource").value.trim();
-          if (src) params.set('url', src);
+          if (src) {
+              const problem = rtspAddressProblem(src);
+              if (problem) { announce(problem, true); return; }
+              params.set('url', src);
+          }
 
           fetch(`/edit_settings?${params.toString()}`)
               .then(res => {
@@ -3311,9 +3315,25 @@
     fetchMaxStorage();
     pollVisible(fetchMaxStorage, 10000);
 
+    // Every hand-typed rtsp URL failure so far: missing credentials (401),
+    // missing /stream path (404). Catch both before they reach the camera.
+    function rtspAddressProblem(value) {
+      const src = (value || '').trim();
+      if (!src.startsWith('rtsp://')) return null; // other protocols: no opinion
+      let url;
+      try { url = new URL(src); } catch (_) { return 'That address does not look like a valid URL.'; }
+      if (!url.pathname || url.pathname === '/')
+        return 'The address needs a stream path — Tapo cameras use /stream1 at the end.';
+      if (!url.username)
+        return 'Include the camera account in the address: rtsp://user:password@address/stream1.';
+      return null;
+    }
+
     document.getElementById("addCameraForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const form = e.target;
+      const problem = rtspAddressProblem(form.querySelector('#cameraSourceInput').value);
+      if (problem) { announce(problem, true); return; }
       const params = new URLSearchParams(new FormData(form)).toString();
       const submit = form.querySelector('button[type=submit]');
       submit.disabled = true;
