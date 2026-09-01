@@ -108,7 +108,7 @@ def build_capabilities():
       reasons=dict(
           use_clip='Search by description needs the OpenCLIP model, which is not included in this build.',
           model_sizes='That detection model is not included in this build.',
-          qwen_sizes='This build includes the 2B description model only.'))
+          qwen_sizes='That description model is not on this Mac yet. Larger models can be downloaded from Settings.' if mlx else 'This build includes the 2B description model only.'))
 
 
 def unsupported_settings(data):
