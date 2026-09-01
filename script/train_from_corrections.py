@@ -47,8 +47,13 @@ def assemble(data_root, out_dir, names, teacher=None, min_corrections=20):
     from PIL import Image
     store = data_root / 'corrections'
     rows = [json.loads(l) for l in (store / 'corrections.jsonl').read_text().splitlines() if l.strip()] if (store / 'corrections.jsonl').exists() else []
-    if len(rows) < min_corrections:
-        sys.exit(f'Only {len(rows)} corrections recorded; collect at least {min_corrections} (use Wrong on journal events) before training.')
+    disagreements = sum(1 for r in rows if r['verdict'] != 'confirm')
+    # "Looks right" alone is the model grading its own homework: only verdicts
+    # that disagree with it carry information the fine-tune can learn from.
+    if len(rows) < min_corrections or disagreements < max(1, min_corrections // 2):
+        sys.exit(f'{len(rows)} corrections recorded, {disagreements} of them disagreements (Not a … / It was actually …). '
+                 f'Training needs at least {min_corrections} in total with {max(1, min_corrections // 2)} disagreements; '
+                 'confirmations alone would only reinforce what the detector already believes.')
     images_dir, labels_dir = out_dir / 'images', out_dir / 'labels'
     for d in (images_dir, labels_dir): d.mkdir(parents=True, exist_ok=True)
     name_to_idx = {n: i for i, n in enumerate(names)}
@@ -107,7 +112,10 @@ def main():
     best = work / 'run' / 'weights' / 'best.pt'
     tuned = YOLO(str(best))
     exported = Path(tuned.export(format='coreml', nms=True, imgsz=640))
-    target = ROOT / 'models' / f'yolo11{args.size}-home.mlpackage'
+    # Into the app's data directory: the installed app looks there first, so
+    # the tuned model takes effect on its next launch with no rebuild.
+    target = data_root / 'models' / f'yolo11{args.size}-home.mlpackage'
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists(): shutil.rmtree(target)
     shutil.move(str(exported), str(target))
     # Report how many owner verdicts the tuned model now honours.
@@ -123,7 +131,7 @@ def main():
             if row['verdict'] == 'not_object' and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
             if row['verdict'] == 'wrong_label' and row['label'] in labels and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
     print(f'owner verdicts honoured: stock {honoured["stock"]}/{honoured["checked"]}, tuned {honoured["tuned"]}/{honoured["checked"]}')
-    print(f'exported {target}; the engine will prefer it on next launch. Re-run script/build_and_run.sh to bundle it.')
+    print(f'exported {target}; quit and reopen ClearCam and it will use this model (Settings > Detection model stays on the same size).')
 
 
 if __name__ == '__main__':

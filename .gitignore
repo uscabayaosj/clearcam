@@ -8,3 +8,6 @@ macos/.build/
 macos/.swiftpm/
 yolo11n.pt
 .codex/
+
+# Ultralytics checkpoints are downloaded on demand, never committed.
+*.pt
