@@ -199,3 +199,19 @@ class TriggerPromptArrayTests(unittest.TestCase):
         self.assertIn('bottom right', prompt)
         self.assertTrue(prompt.startswith('A car was detected'))
         self.assertNotIn('of the frame', trigger_prompt('car', None, 1920, 1080))
+
+
+class BoundedImageTests(unittest.TestCase):
+    def test_large_frames_are_shrunk_and_small_ones_untouched(self):
+        import os, tempfile
+        from PIL import Image
+        from utils.mlx_describer import bounded_image
+        with tempfile.TemporaryDirectory() as d:
+            big = os.path.join(d, 'big.jpg'); Image.new('RGB', (2304, 1296)).save(big)
+            small = os.path.join(d, 'small.jpg'); Image.new('RGB', (900, 500)).save(small)
+            out = bounded_image(big, 1024)
+            self.assertNotEqual(out, big)
+            with Image.open(out) as im: self.assertEqual(im.size, (1024, 576))
+            os.unlink(out)
+            self.assertEqual(bounded_image(small, 1024), small)
+            self.assertEqual(bounded_image(big, 0), big)

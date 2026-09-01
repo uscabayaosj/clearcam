@@ -15,6 +15,26 @@ import sys
 import time
 
 REPOS = {2: 'mlx-community/Qwen3-VL-2B-Instruct-4bit', 8: 'mlx-community/Qwen3-VL-8B-Instruct-4bit'}
+# Qwen3-VL spends vision tokens in proportion to pixels: a native 2304x1296
+# frame costs ~5x a 1024-wide one for no extra descriptive detail at this
+# task. Trigger crops are already small; this protects full-frame backfills.
+MAX_SIDE = int(os.environ.get('CLEARCAM_DESCRIBE_MAX_SIDE', '1024'))
+
+
+def bounded_image(path, max_side=None):
+    """Return a path whose longest side is at most max_side (a temp copy if shrunk)."""
+    max_side = MAX_SIDE if max_side is None else max_side
+    if not max_side: return str(path)
+    from PIL import Image
+    import tempfile
+    with Image.open(path) as im:
+        w, h = im.size
+        if max(w, h) <= max_side: return str(path)
+        scale = max_side / max(w, h)
+        small = im.convert('RGB').resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+        out = tempfile.NamedTemporaryFile(suffix='.jpg', prefix='clearcam-describe-', delete=False)
+        small.save(out.name, quality=90)
+        return out.name
 
 
 def local_model_dir(size):
@@ -181,10 +201,14 @@ def serve():
             with contextlib.redirect_stdout(sys.stderr):
                 from mlx_vlm import generate
                 from mlx_vlm.prompt_utils import apply_chat_template
-                images = [request['image_path']] if request['image_path'] else []
+                images = [bounded_image(request['image_path'])] if request['image_path'] else []
                 formatted = apply_chat_template(processor, config, request['prompt'], num_images=len(images))
                 out = generate(model, processor, formatted, images, max_tokens=int(request['max_tokens']), verbose=False)
                 text = (out.text if hasattr(out, 'text') else out) or ''
+            for temp in images:
+                if temp != request['image_path']:
+                    try: os.unlink(temp)
+                    except OSError: pass
             stop.set()
             reply({'description': str(text).strip()})
         except Exception:
