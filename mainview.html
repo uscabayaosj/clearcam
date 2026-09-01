@@ -1402,8 +1402,15 @@
     .setting-row.unavailable { opacity: .62; }
     .setting-row.unavailable input, .setting-row.unavailable select { cursor: not-allowed; }
     .setting-unavailable { display: inline-block; margin-top: 4px; font-size: .72rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--brass); }
-    .correction-choices { display: flex; gap: 8px; margin-top: 12px; }
-    .correction-choices button { flex: 1; }
+    .correction-modal { max-width: 480px; width: min(480px, 94vw); max-height: 88vh; overflow-y: auto; }
+    /* The preview is the subject crop when one exists; either way it is bounded. */
+    #correctionPreview:not([hidden]) { display: block; width: 100%; max-height: 42vh; aspect-ratio: 4 / 3; object-fit: contain; background: var(--ink-soft); border-radius: 10px; margin-bottom: 12px; }
+    .correction-question { margin: 0 0 4px; color: var(--paper); font-size: .95rem; font-weight: 600; line-height: 1.4; }
+    .correction-choices { display: flex; gap: 10px; margin-top: 12px; }
+    .correction-choices button { flex: 1; min-height: 44px; }
+    .correction-modal .alert-inline-row { flex-wrap: nowrap; }
+    #correctionLabel { flex: 1; min-width: 0; min-height: 44px; }
+    .correction-modal .enroll-note { margin: 14px 0 0; }
     .correction-state { display: block; margin-top: 4px; color: var(--brass); font-weight: 650; font-size: .74rem; letter-spacing: .02em; }
     .event-image-actions button.corrected { color: var(--brass); }
     .ledger-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
@@ -1966,13 +1973,13 @@
     </div>
 
     <div id="correctionModal" class="modal">
-      <div class="modal-content" style="max-width: 420px;">
+      <div class="modal-content correction-modal">
         <div class="modal-header">
           <h3>Correct this detection</h3>
           <span class="close" onclick="closeCorrectionModal()">&times;</span>
         </div>
-        <img id="correctionPreview" alt="" hidden>
-        <p id="correctionQuestion" class="enroll-note"></p>
+        <img id="correctionPreview" alt="The detection being corrected" hidden>
+        <p id="correctionQuestion" class="correction-question"></p>
         <div class="correction-choices">
           <button type="button" class="modal-quiet" onclick="submitCorrection('confirm')">Looks right</button>
           <button type="button" class="modal-quiet" id="correctionNotObject" onclick="submitCorrection('not_object')">Nothing there</button>
@@ -4572,12 +4579,20 @@
         ? `ClearCam saw a ${trigger.label} here (${Math.round(trigger.score * 100)}% sure). Was it right?`
         : 'Was this detection right?';
       const preview = document.getElementById('correctionPreview');
-      preview.src = img.url; preview.hidden = false;
+      preview.onerror = () => { preview.onerror = null; preview.src = img.url; };
+      preview.src = img.url.replace(/\.jpe?g$/i, '.trigger.jpg');
+      preview.hidden = false;
       const select = document.getElementById('correctionLabel');
       select.innerHTML = '';
       const source = typeof classLabels === 'undefined' ? [] : classLabels;
-      const labels = (Array.isArray(source) ? source.slice() : Object.values(source)).map(String).sort();
-      for (const label of labels) {
+      const all = (Array.isArray(source) ? source.slice() : Object.values(source)).map(String);
+      // What a home camera actually confuses, first; the rest alphabetically.
+      const likely = ['person', 'car', 'truck', 'bicycle', 'motorcycle', 'bus', 'dog', 'cat', 'bird'];
+      const ordered = [...likely.filter(l => all.includes(l)), ...all.filter(l => !likely.includes(l)).sort()];
+      const placeholder = document.createElement('option');
+      placeholder.value = ''; placeholder.textContent = 'Choose an object type…'; placeholder.disabled = true; placeholder.selected = true;
+      select.append(placeholder);
+      for (const label of ordered) {
         if (trigger && label === trigger.label) continue;
         const option = document.createElement('option'); option.value = label; option.textContent = label;
         select.append(option);
@@ -4590,6 +4605,10 @@
     async function submitCorrection(verdict) {
       if (!correctionTarget) return;
       const label = verdict === 'wrong_label' ? document.getElementById('correctionLabel').value : '';
+      if (verdict === 'wrong_label' && !label) {
+        document.getElementById('correctionFeedback').textContent = 'Choose what it actually was first.';
+        return;
+      }
       const params = new URLSearchParams({ image: correctionTarget.url, verdict, label });
       try {
         const response = await fetch(`/event_correction?${params}`);
