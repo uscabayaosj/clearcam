@@ -41,7 +41,13 @@ def signing_identity():
         identities = run('/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning')
     except subprocess.CalledProcessError:
         return '-'
-    return 'ClearCam Local Signing' if 'ClearCam Local Signing' in identities else '-'
+    # Sign by hash: a name is ambiguous the moment the certificate is imported
+    # twice, and codesign refuses ambiguous names outright.
+    for line in identities.splitlines():
+        if 'ClearCam Local Signing' in line:
+            parts = line.split()
+            if len(parts) >= 2 and len(parts[1]) == 40: return parts[1]
+    return '-'
 
 
 def copy_tree(source, destination):
