@@ -90,3 +90,29 @@ class RecordingTimelineTests(unittest.TestCase):
         self.assertIn('#EXT-X-DISCONTINUITY-SEQUENCE:1', live)
         self.assertNotIn('#EXT-X-DISCONTINUITY\n', live)
         self.assertIsNone(live_playlist(self.root / 'missing.m3u8'))
+
+
+class LiveWindowTargetDurationTests(unittest.TestCase):
+    def _day(self, durations):
+        import tempfile
+        from pathlib import Path
+        folder = tempfile.mkdtemp()
+        lines = ['#EXTM3U', '#EXT-X-VERSION:6', '#EXT-X-TARGETDURATION:%d' % max(1, int(max(durations)) + 1)]
+        for i, d in enumerate(durations):
+            lines += ['#EXTINF:%.6f,' % d, 'seg_%03d.ts' % i]
+        path = Path(folder) / 'stream.m3u8'
+        path.write_text('\n'.join(lines) + '\n')
+        return path
+
+    def test_target_comes_from_the_window_not_the_day(self):
+        from utils.recording_timeline import live_playlist
+        text = live_playlist(self._day([2.0] * 20 + [9.3] + [2.0] * 40), window=8)
+        self.assertIn('#EXT-X-TARGETDURATION:2\n', text)
+        self.assertEqual(text.count('.ts'), 8)
+
+    def test_window_grows_to_cover_three_target_durations(self):
+        from utils.recording_timeline import live_playlist
+        text = live_playlist(self._day([2.0] * 40 + [9.3] + [2.0] * 5), window=8)
+        self.assertIn('#EXT-X-TARGETDURATION:10\n', text)
+        total = sum(float(l[8:].split(',')[0]) for l in text.splitlines() if l.startswith('#EXTINF:'))
+        self.assertGreaterEqual(total, 30)

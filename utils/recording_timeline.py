@@ -136,8 +136,27 @@ def live_playlist(playlist, window=3):
             header.append(line)
     if not entries:
         return None
+
+    def duration(entry):
+        for tag in entry:
+            if tag.startswith('#EXTINF:'):
+                try: return float(tag[8:].split(',')[0])
+                except ValueError: return 0.0
+        return 0.0
+
+    # Apple's HLS engine will not start a live playlist holding less than three
+    # target durations of media, and the day's TARGETDURATION is inflated by any
+    # single long segment a recorder restart ever produced. So derive the
+    # target from the window's own segments and grow the window until it
+    # covers three of them.
     kept = entries[-window:]
-    for entry in entries[:-window]:
+    while len(kept) < len(entries):
+        target = max(1, math.ceil(max(duration(e) for e in kept)))
+        if sum(duration(e) for e in kept) >= 3 * target: break
+        kept = entries[-(len(kept) + 1):]
+    target = max(1, math.ceil(max(duration(e) for e in kept)))
+    header = [h for h in header if not h.startswith('#EXT-X-TARGETDURATION')] + [f'#EXT-X-TARGETDURATION:{target}']
+    for entry in entries[:-len(kept)]:
         discontinuities += sum(1 for tag in entry if tag.startswith('#EXT-X-DISCONTINUITY'))
     body = [tag for entry in kept for tag in entry]
     # A window that opens mid-session must not lead with a discontinuity marker.
