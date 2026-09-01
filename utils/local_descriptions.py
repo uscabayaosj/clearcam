@@ -26,7 +26,7 @@ def trigger_prompt(label, box, width, height):
     opens on scenery buries the reason the owner was alerted.
     """
     if not label: return PROMPT
-    where = frame_region(box, width, height) if box else None
+    where = frame_region(box, width, height) if box is not None and len(box) == 4 else None
     located = f" in the {where} of the frame" if where else ""
     return (f"A {label} was detected{located} in this camera image. Write one short sentence that "
             f"starts with \"A {label}\" and says what it is visibly doing, then adds only essential "

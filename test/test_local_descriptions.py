@@ -188,3 +188,14 @@ class MlxDownloadTests(unittest.TestCase):
             with self.assertRaises(ValueError): mlx_describer.start_download(3)
             self.assertEqual(mlx_describer.download_progress()['state'], 'idle')
             self.assertTrue(str(mlx_describer.download_dir(8)).endswith('models/mlx/Qwen3-VL-8B-Instruct-4bit'))
+
+
+class TriggerPromptArrayTests(unittest.TestCase):
+    def test_numpy_box_does_not_raise_and_locates_the_subject(self):
+        import numpy as np
+        from utils.local_descriptions import trigger_prompt
+        box = np.array([1500.0, 800.0, 1800.0, 1000.0])
+        prompt = trigger_prompt('car', box, 1920, 1080)
+        self.assertIn('bottom right', prompt)
+        self.assertTrue(prompt.startswith('A car was detected'))
+        self.assertNotIn('of the frame', trigger_prompt('car', None, 1920, 1080))
