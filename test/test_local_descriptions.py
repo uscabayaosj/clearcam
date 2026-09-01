@@ -113,3 +113,38 @@ class TriggerCropAndBackfillTests(unittest.TestCase):
             (Path(folder) / 'yolo11s.mlpackage').mkdir()
             self.assertEqual(available_sizes([None, folder]), ['t', 's'])
             self.assertEqual(available_sizes([None]), [])
+
+
+class CorrectionsTests(unittest.TestCase):
+    def test_detections_then_correction_round_trip(self):
+        import json, tempfile
+        from pathlib import Path
+        from utils import corrections
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            event = root / 'cameras' / 'front' / 'event_images' / '2026-09-01' / '1_notif.jpg'
+            event.parent.mkdir(parents=True); event.write_bytes(b'jpg')
+            event.with_suffix('.trigger.jpg').write_bytes(b'crop')
+            corrections.write_detections(event, [(10, 20, 110, 220, 0.91, 0)], ['person', 'bicycle'], 1920, 1080, trigger_index=0)
+            stored = corrections.read_detections(event)
+            self.assertEqual(stored['detections'][0]['label'], 'person')
+            self.assertTrue(stored['detections'][0]['trigger'])
+            entry = corrections.record_correction(root, event, 'wrong_label', 'bicycle')
+            self.assertEqual(entry['label'], 'bicycle')
+            self.assertEqual(corrections.read_correction(event)['verdict'], 'wrong_label')
+            kept = list((root / 'corrections' / 'images').iterdir())
+            self.assertEqual(len(kept), 2)            # image and its trigger crop survive retention
+            self.assertEqual(len(corrections.load_corrections(root)), 1)
+            with self.assertRaises(ValueError): corrections.record_correction(root, event, 'wrong_label', None)
+            with self.assertRaises(ValueError): corrections.record_correction(root, event, 'nonsense')
+
+    def test_per_home_package_is_preferred(self):
+        import tempfile
+        from pathlib import Path
+        from detection.coreml_yolo import resolve_package
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'yolo11s.mlpackage').mkdir()
+            self.assertEqual(resolve_package([folder], 's').name, 'yolo11s.mlpackage')
+            (Path(folder) / 'yolo11s-home.mlpackage').mkdir()
+            self.assertEqual(resolve_package([folder], 's').name, 'yolo11s-home.mlpackage')
+            self.assertIsNone(resolve_package([folder], 'm'))

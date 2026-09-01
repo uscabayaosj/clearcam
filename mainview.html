@@ -1402,6 +1402,10 @@
     .setting-row.unavailable { opacity: .62; }
     .setting-row.unavailable input, .setting-row.unavailable select { cursor: not-allowed; }
     .setting-unavailable { display: inline-block; margin-top: 4px; font-size: .72rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--brass); }
+    .correction-choices { display: flex; gap: 8px; margin-top: 12px; }
+    .correction-choices button { flex: 1; }
+    .correction-state { display: block; margin-top: 4px; color: var(--brass); font-weight: 650; font-size: .74rem; letter-spacing: .02em; }
+    .event-image-actions button.corrected { color: var(--brass); }
     .ledger-block { margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--line); }
     .ledger-block h3 { margin: 0 0 6px; font-size: .95rem; color: var(--paper); }
     .secret-field { display: flex; gap: 8px; align-items: stretch; }
@@ -1955,6 +1959,28 @@
       </div>
     </div>
 
+    <div id="correctionModal" class="modal">
+      <div class="modal-content" style="max-width: 420px;">
+        <div class="modal-header">
+          <h3>Correct this detection</h3>
+          <span class="close" onclick="closeCorrectionModal()">&times;</span>
+        </div>
+        <img id="correctionPreview" alt="" hidden>
+        <p id="correctionQuestion" class="enroll-note"></p>
+        <div class="correction-choices">
+          <button type="button" class="modal-quiet" onclick="submitCorrection('confirm')">Looks right</button>
+          <button type="button" class="modal-quiet" id="correctionNotObject" onclick="submitCorrection('not_object')">Nothing there</button>
+        </div>
+        <label for="correctionLabel" class="alert-group-label" style="margin-top: 14px;">It was actually a…</label>
+        <div class="alert-inline-row">
+          <select id="correctionLabel"></select>
+          <button type="button" class="modal-add" onclick="submitCorrection('wrong_label')">Save</button>
+        </div>
+        <p class="enroll-note">Corrections stay on this Mac and teach the detector your home when you run a training pass.</p>
+        <p id="correctionFeedback" role="alert"></p>
+      </div>
+    </div>
+
     <div id="alertModal" class="modal">
       <div class="modal-content" style="max-width: 520px;">
         <div class="modal-header">
@@ -2026,6 +2052,7 @@
       <path d="M8 5v14l11-7z"/>
     </symbol>
 
+    <symbol id="icon-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="icon-person" viewBox="0 0 24 24">
       <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
     </symbol>
@@ -4289,6 +4316,16 @@
       };
       if (typeof img.score === 'number') action('Search Similar', 'icon-magnify', () => searchWithImage(img.url), 'Similar');
       action('Name this person', 'icon-person', () => openEnrollModal(img.url), 'Name');
+      const wrong = action('Correct this detection', 'icon-flag', () => openCorrectionModal(img), 'Wrong');
+      if (img.correction) {
+        wrong.classList.add('corrected');
+        wrong.title = 'Correction recorded';
+        const verdictText = img.correction.verdict === 'confirm' ? 'Confirmed'
+          : img.correction.verdict === 'not_object' ? 'Marked: nothing there'
+          : `Marked: ${img.correction.label}`;
+        const marked = document.createElement('small'); marked.className = 'correction-state'; marked.textContent = verdictText;
+        info.append(marked);
+      }
       const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder), 'Play');
       play.disabled = !Number.isFinite(img.playback_offset);
       if (play.disabled) {
@@ -4477,6 +4514,48 @@
     }
 
     let enrollImageUrl = null;
+    let correctionTarget = null;
+    function openCorrectionModal(img) {
+      correctionTarget = img;
+      const trigger = img.trigger;
+      document.getElementById('correctionQuestion').textContent = trigger
+        ? `ClearCam saw a ${trigger.label} here (${Math.round(trigger.score * 100)}% sure). Was it right?`
+        : 'Was this detection right?';
+      const preview = document.getElementById('correctionPreview');
+      preview.src = img.url; preview.hidden = false;
+      const select = document.getElementById('correctionLabel');
+      select.innerHTML = '';
+      const source = typeof classLabels === 'undefined' ? [] : classLabels;
+      const labels = (Array.isArray(source) ? source.slice() : Object.values(source)).map(String).sort();
+      for (const label of labels) {
+        if (trigger && label === trigger.label) continue;
+        const option = document.createElement('option'); option.value = label; option.textContent = label;
+        select.append(option);
+      }
+      document.getElementById('correctionNotObject').textContent = trigger ? `Not a ${trigger.label}` : 'Nothing there';
+      document.getElementById('correctionFeedback').textContent = '';
+      document.getElementById('correctionModal').style.display = 'flex';
+    }
+    function closeCorrectionModal() { document.getElementById('correctionModal').style.display = 'none'; correctionTarget = null; }
+    async function submitCorrection(verdict) {
+      if (!correctionTarget) return;
+      const label = verdict === 'wrong_label' ? document.getElementById('correctionLabel').value : '';
+      const params = new URLSearchParams({ image: correctionTarget.url, verdict, label });
+      try {
+        const response = await fetch(`/event_correction?${params}`);
+        if (!response.ok) {
+          const reason = await response.json().then(b => b && b.error).catch(() => null);
+          throw new Error(reason || '');
+        }
+        const result = await response.json();
+        closeCorrectionModal();
+        announce(`Correction saved — ${result.total} so far. Run a training pass when you have a few dozen.`);
+        loadEventImages(false);
+      } catch (error) {
+        document.getElementById('correctionFeedback').textContent = (error && error.message) || 'The correction was not saved. Try again.';
+      }
+    }
+
     function openEnrollModal(imageUrl) {
       enrollImageUrl = imageUrl;
       const preview = document.getElementById('enrollPreview');

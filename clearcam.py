@@ -8,16 +8,14 @@ from detection import coreml_yolo
 def make_detector(model_size, model_res):
   """Prefer the Core ML model on the Neural Engine; fall back to tinygrad YOLO."""
   if os.environ.get('CLEARCAM_NO_COREML') != '1':
-    for candidate in (os.environ.get('CLEARCAM_MODEL_DIR'), 'models'):
-      if not candidate: continue
-      package = Path(candidate) / coreml_yolo.MODEL_FILES.get(model_size, coreml_yolo.MODEL_FILE)
-      if package.exists():
-        try:
-          detector = coreml_yolo.CoreMLYolo(package)
-          print('Detection: Core ML (Neural Engine),', package.name)
-          return detector
-        except Exception as error:
-          print('Core ML unavailable, using tinygrad YOLO:', error)
+    package = coreml_yolo.resolve_package([os.environ.get('CLEARCAM_MODEL_DIR'), 'models', str(BASE_DIR / 'models')], model_size)
+    if package is not None:
+      try:
+        detector = coreml_yolo.CoreMLYolo(package)
+        print('Detection: Core ML (Neural Engine),', package.name)
+        return detector
+      except Exception as error:
+        print('Core ML unavailable, using tinygrad YOLO:', error)
   print('Detection: tinygrad YOLO', model_size)
   return YOLOv9(model_size, model_res)
 import numpy as np
@@ -43,6 +41,7 @@ from utils.db import db
 from utils import keychain
 from utils import household
 from utils import summaries
+from utils import corrections
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop
 import multiprocessing
@@ -748,6 +747,13 @@ class VideoCapture:
                   self.filename[cam_name] = filepath / f"{event_id}_notif.jpg" if alert.is_notif else filepath / f"{event_id}.jpg"
                   if not self.vod[cam_name]: cv2.imwrite(str(self.filename[cam_name]), annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]) # we've 10MB limit for video file, raw png is 3MB!
                   if not self.vod[cam_name]: write_event_time(self.filename[cam_name], time.time())
+                  if not self.vod[cam_name]:
+                    try:
+                      fh, fw = self.last_frames[cam_name][-1].shape[:2]
+                      top = max(range(len(filtered_preds)), key=lambda i: filtered_preds[i][4]) if len(filtered_preds) else None
+                      corrections.write_detections(self.filename[cam_name], filtered_preds, class_labels, fw, fh, top)
+                    except Exception as error:
+                      print('detections sidecar failed:', error)
                   recognized = None
                   if not self.vod[cam_name]:
                     # Match against enrolled household faces on the un-annotated frame.
@@ -1265,6 +1271,25 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_200(alert_info)
             return
 
+        if parsed_path.path == '/event_correction':
+            image = query.get('image', [None])[0]
+            verdict = query.get('verdict', [None])[0]
+            label = (query.get('label', [None])[0] or '').strip() or None
+            if not image or verdict not in corrections.VERDICTS:
+                self.send_refusal('A verdict of confirm, wrong_label, or not_object is required')
+                return
+            try:
+                image_path = contained_path(BASE_DIR / 'cameras', image.removeprefix('/cameras/').lstrip('/'))
+                if image_path.suffix.lower() not in ('.jpg', '.jpeg'): raise ValueError('Not an event image')
+                if label and label not in class_labels: raise ValueError('Unknown object type')
+                entry = corrections.record_correction(BASE_DIR, image_path, verdict, label)
+            except ValueError as error:
+                self.send_refusal(str(error) or 'Invalid correction')
+                return
+            self.send_200(dict(verdict=entry['verdict'], label=entry['label'],
+                               total=len(corrections.load_corrections(BASE_DIR))))
+            return
+
         if parsed_path.path == '/capabilities':
             self.send_200(build_capabilities())
             return
@@ -1635,6 +1660,8 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                     "folder": selected_dir,
                     "description": read_description(img),
                     "people": household.read_people(img),
+                    "trigger": next((d for d in (corrections.read_detections(img) or {}).get('detections', []) if d.get('trigger')), None),
+                    "correction": corrections.read_correction(img),
                     **timing,
                   })
 

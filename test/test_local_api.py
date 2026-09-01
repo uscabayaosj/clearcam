@@ -28,10 +28,11 @@ class LocalAPIRegressionTests(unittest.TestCase):
         source = ast.parse((Path(__file__).parents[1] / 'clearcam.py').read_text())
         nodes = [node for node in source.body if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ('HLSRequestHandler', 'image_sort_key')]
         from utils import household
+from utils import corrections
         namespace = dict(globals(), BASE_DIR=self.root,
                          global_settings=SimpleNamespace(use_face=False, use_clip=False),
                          read_description=lambda _: None, is_vod=lambda _: False,
-                         household=household, household_store=household.HouseholdStore(self.root),
+                         household=household, corrections=corrections, household_store=household.HouseholdStore(self.root),
                          add_to_queue=lambda fn, *args: fn(*args),
                          enroll_household_face=lambda name, path: dict(error='No face was found in that image'))
         exec(compile(ast.Module(body=nodes, type_ignores=[]), '<handler>', 'exec'), namespace)

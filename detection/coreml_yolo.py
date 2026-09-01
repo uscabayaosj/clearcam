@@ -12,6 +12,17 @@ MODEL_FILE = MODEL_FILES['t']
 INPUT_SIZE = 640
 
 
+def resolve_package(model_dirs, size):
+    """The per-home fine-tune wins over the stock package of the same size."""
+    from pathlib import Path
+    stock = MODEL_FILES.get(size, MODEL_FILE)
+    tuned = stock.replace('.mlpackage', '-home.mlpackage')
+    for name in (tuned, stock):
+        for d in model_dirs:
+            if d and (Path(d) / name).exists(): return Path(d) / name
+    return None
+
+
 def available_sizes(model_dirs):
     """Detector sizes whose Core ML package is actually present."""
     from pathlib import Path
