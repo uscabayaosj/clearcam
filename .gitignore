@@ -11,3 +11,4 @@ yolo11n.pt
 
 # Ultralytics checkpoints are downloaded on demand, never committed.
 *.pt
+.venv-train/
