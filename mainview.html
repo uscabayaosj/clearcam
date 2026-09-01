@@ -4055,7 +4055,7 @@
       const tooltipMap = {
         "use_clip": "Search your events with plain language (\"red car yesterday\") or a similar image. Runs on this Mac.",
         "use_face": "Find events by face image. Household recognition on journal events works independently of this.",
-        "model_size": "Larger models spot objects more reliably but use more of this Mac. This build includes Tiny.",
+        "model_size": "Larger models spot small and distant objects more reliably and cost more of this Mac per frame. Only sizes included in this build are listed.",
         "model_res": "Higher detail helps with small or distant objects, at more processing cost.",
         "use_qwen": "Writes a short sentence about each event for the journal and notifications. Runs on this Mac; images stay local. Descriptions may be inaccurate.",
         "qwen_size": "The larger model writes better descriptions and uses more memory. This build includes 2B.",
@@ -4079,7 +4079,7 @@
         let input;
         if (key === "model_size") {
           input = document.createElement("select");
-          const sizeNames = { t: "Tiny", s: "Small", m: "Medium", c: "Compact", e: "Extended" };
+          const sizeNames = { t: "Nano (fastest)", s: "Small (recommended)", m: "Medium (most accurate)", c: "Compact", e: "Extended" };
           const allowed = capabilities?.model_sizes || ["t", "s", "m", "c", "e"];
           ["t", "s", "m", "c", "e"].filter(opt => allowed.includes(opt)).forEach(opt => {
             const option = document.createElement("option");

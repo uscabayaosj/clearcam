@@ -25,6 +25,7 @@ def collect_window(cameras_root, start_ts, end_ts):
     """Facts about every event between start_ts and end_ts (wall clock)."""
     events = []
     for image in Path(cameras_root).glob('*/event_images/*/*.jpg'):
+        if image.name.endswith('.trigger.jpg'): continue   # description input, not an event
         try:
             captured = event_timing(image).get('captured_at')
         except Exception:

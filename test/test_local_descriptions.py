@@ -71,3 +71,45 @@ class LocalDescriptionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TriggerCropAndBackfillTests(unittest.TestCase):
+    def test_trigger_crop_is_written_around_the_box_and_never_tiny(self):
+        import numpy as np, tempfile, cv2
+        from pathlib import Path
+        from utils.local_descriptions import write_trigger_crop
+        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as folder:
+            event = Path(folder) / '1_notif.jpg'
+            crop = write_trigger_crop(frame, (900, 500, 960, 560), event)   # a 60px box
+            self.assertIsNotNone(crop)
+            self.assertTrue(str(crop).endswith('.trigger.jpg'))
+            h, w = cv2.imread(str(crop)).shape[:2]
+            self.assertGreaterEqual(min(h, w), 320)          # enlarged to a useful size
+            edge = write_trigger_crop(frame, (1890, 1060, 1919, 1079), event)  # clipped at the corner
+            self.assertIsNotNone(edge)
+
+    def test_backfill_only_runs_when_idle_and_rate_limited(self):
+        from utils.local_descriptions import LocalDescriptions
+        import tempfile
+        calls = []
+        local = LocalDescriptions(model_factory=lambda **kw: None)
+        local.enabled = True
+        local.retry_saved = lambda root: calls.append(root) or 1
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(local.backfill_if_idle(root, every=300), 1)
+            self.assertEqual(local.backfill_if_idle(root, every=300), 0)   # too soon
+            local.last_backfill = 0
+            local.jobs.put(('summary', 'p', lambda _: None))                # busy queue
+            self.assertEqual(local.backfill_if_idle(root, every=300), 0)
+        self.assertEqual(len(calls), 1)
+
+    def test_available_sizes_reflects_packages_on_disk(self):
+        import tempfile
+        from pathlib import Path
+        from detection.coreml_yolo import available_sizes
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'yolo11n.mlpackage').mkdir()
+            (Path(folder) / 'yolo11s.mlpackage').mkdir()
+            self.assertEqual(available_sizes([None, folder]), ['t', 's'])
+            self.assertEqual(available_sizes([None]), [])

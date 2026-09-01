@@ -7,8 +7,18 @@ embedded NMS pipeline, so no decoding or NMS lives here.
 """
 import numpy as np
 
-MODEL_FILE = 'yolo11n.mlpackage'
+MODEL_FILES = {'t': 'yolo11n.mlpackage', 's': 'yolo11s.mlpackage', 'm': 'yolo11m.mlpackage'}
+MODEL_FILE = MODEL_FILES['t']
 INPUT_SIZE = 640
+
+
+def available_sizes(model_dirs):
+    """Detector sizes whose Core ML package is actually present."""
+    from pathlib import Path
+    found = []
+    for size, name in MODEL_FILES.items():
+        if any(d and (Path(d) / name).exists() for d in model_dirs): found.append(size)
+    return found
 
 
 class CoreMLYolo:

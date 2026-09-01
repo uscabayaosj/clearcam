@@ -20,9 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', default=str(ROOT / 'models/yolo11n.mlpackage'))
+    parser.add_argument('--model', default='yolo11n.pt', help='Ultralytics checkpoint, e.g. yolo11s.pt')
     args = parser.parse_args()
     from ultralytics import YOLO
-    model = YOLO('yolo11n.pt')
+    model = YOLO(args.model)
     exported = Path(model.export(format='coreml', nms=True, imgsz=640))
     target = Path(args.out)
     if target.exists(): shutil.rmtree(target)

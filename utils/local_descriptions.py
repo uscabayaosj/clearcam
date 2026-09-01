@@ -28,10 +28,33 @@ def trigger_prompt(label, box, width, height):
     if not label: return PROMPT
     where = frame_region(box, width, height) if box else None
     located = f" in the {where} of the frame" if where else ""
-    return (f"A {label} was detected{located} and is outlined by a box in this camera image. "
-            f"Begin your sentence with that {label} and what it is visibly doing, then add only "
-            "essential surroundings. One short sentence. Do not infer identity or intent, and do "
-            "not mention the box.")
+    return (f"A {label} was detected{located} in this camera image. Write one short sentence that "
+            f"starts with \"A {label}\" and says what it is visibly doing, then adds only essential "
+            "surroundings. Do not infer identity or intent. Do not mention detection, boxes, or the frame.")
+
+def write_trigger_crop(frame, box, event_path, margin=1.0, min_side=320):
+    """Save the region around the triggering box (un-annotated) for description.
+
+    A 2x crop carries the subject at far higher pixel density than the whole
+    frame, and the model spends its vision budget on the thing that fired
+    rather than on scenery. Returns None so callers fall back to the frame.
+    """
+    try:
+        import cv2
+        H, W = frame.shape[:2]
+        x1, y1, x2, y2 = map(float, box)
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        hw = max((x2 - x1) * (1 + margin) / 2, min_side / 2)
+        hh = max((y2 - y1) * (1 + margin) / 2, min_side / 2)
+        a, b = int(max(0, cx - hw)), int(min(W, cx + hw))
+        c, d = int(max(0, cy - hh)), int(min(H, cy + hh))
+        if b - a < 64 or d - c < 64: return None
+        target = Path(str(event_path)).with_suffix('.trigger.jpg')
+        cv2.imwrite(str(target), frame[c:d, a:b], [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return target
+    except Exception:
+        return None
+
 
 def read_description(path):
     try:
@@ -50,7 +73,8 @@ class LocalDescriptions:
         self.state = 'disabled'
         self.error = None
         self.failure = None
-        self.jobs = queue.Queue(maxsize=8)
+        self.jobs = queue.Queue(maxsize=32)
+        self.last_backfill = 0.0
         self.model = None
         self.model_size = None
         threading.Thread(target=self._run, daemon=True, name='LocalQwen').start()
@@ -66,11 +90,11 @@ class LocalDescriptions:
     def status(self):
         return dict(enabled=self.enabled, model=f'Qwen3-VL-{self.size}B', state=self.state, error=self.error, queued=self.jobs.qsize())
 
-    def submit(self, image_path, camera_name, notify=False, prompt=None):
+    def submit(self, image_path, camera_name, notify=False, prompt=None, image_override=None):
         if not self.enabled:
             return False
         try:
-            self.jobs.put_nowait((Path(image_path), camera_name, (notify, prompt)))
+            self.jobs.put_nowait((Path(image_path), camera_name, (notify, prompt, image_override)))
             return True
         except queue.Full:
             return False
@@ -91,11 +115,19 @@ class LocalDescriptions:
             on_result(None)
             return False
 
+    def backfill_if_idle(self, camera_root, every=300):
+        """Describe anything that was dropped during a busy spell, once the queue is quiet."""
+        import time
+        if not self.enabled or not self.jobs.empty(): return 0
+        if time.time() - self.last_backfill < every: return 0
+        self.last_backfill = time.time()
+        return self.retry_saved(camera_root)
+
     def retry_saved(self, camera_root):
         """Recover a bounded set of missing descriptions without replaying alerts."""
         if not self.enabled:
             return 0
-        pending = sorted(Path(camera_root).glob('*/event_images/*/*.jpg'),
+        pending = sorted((p for p in Path(camera_root).glob('*/event_images/*/*.jpg') if not p.name.endswith('.trigger.jpg')),
                          key=lambda p: p.stat().st_mtime, reverse=True)
         count = 0
         for path in pending:
@@ -114,8 +146,10 @@ class LocalDescriptions:
     def _run(self):
         while True:
             path, camera_name, notify = self.jobs.get()
-            prompt = PROMPT
-            if isinstance(notify, tuple): notify, override = notify; prompt = override or PROMPT
+            prompt, image_override = PROMPT, None
+            if isinstance(notify, tuple):
+                notify, override, image_override = (tuple(notify) + (None, None))[:3]
+                prompt = override or PROMPT
             if path == 'summary':
                 prompt, on_result = camera_name, notify
                 try:
@@ -147,7 +181,8 @@ class LocalDescriptions:
                     self.model = self.model_factory(size=f'{self.size}B', res=(448, 448))
                     self.model_size = self.size
                 self.state = 'describing'
-                description = self.model.generate(prompt=prompt, image_path=path.resolve(), reset=True, max_tokens=96, quiet=True, on_state=self._set_state).strip()
+                source = Path(image_override) if image_override and Path(image_override).exists() else path
+                description = self.model.generate(prompt=prompt, image_path=source.resolve(), reset=True, max_tokens=96, quiet=True, on_state=self._set_state).strip()
                 if not description:
                     raise ValueError('Model returned an empty description')
                 if not self.enabled or not path.exists():

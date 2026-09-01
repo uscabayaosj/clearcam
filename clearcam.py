@@ -10,11 +10,11 @@ def make_detector(model_size, model_res):
   if os.environ.get('CLEARCAM_NO_COREML') != '1':
     for candidate in (os.environ.get('CLEARCAM_MODEL_DIR'), 'models'):
       if not candidate: continue
-      package = Path(candidate) / coreml_yolo.MODEL_FILE
+      package = Path(candidate) / coreml_yolo.MODEL_FILES.get(model_size, coreml_yolo.MODEL_FILE)
       if package.exists():
         try:
           detector = coreml_yolo.CoreMLYolo(package)
-          print('Detection: Core ML (Neural Engine),', coreml_yolo.MODEL_FILE)
+          print('Detection: Core ML (Neural Engine),', package.name)
           return detector
         except Exception as error:
           print('Core ML unavailable, using tinygrad YOLO:', error)
@@ -44,7 +44,7 @@ from utils import keychain
 from utils import household
 from utils import summaries
 from utils import macos_notifications
-from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt
+from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop
 import multiprocessing
 import re
 import base64
@@ -70,6 +70,7 @@ from ocsort_tracker import ocsort
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
 local_descriptions = LocalDescriptions()
+DETECT_FPS = max(1.0, float(os.environ.get('CLEARCAM_DETECT_FPS', '10')))
 household_store = household.HouseholdStore(BASE_DIR)
 notifications_muted_until = 0.0  # wall clock; 0 means notifications are on
 
@@ -89,11 +90,11 @@ def build_capabilities():
   return dict(
       use_clip=False,          # OpenCLIP weights are not bundled
       use_face=True,           # AdaFace and BlazeFace are bundled
-      model_sizes=['t'],       # only yolov9-t is bundled
+      model_sizes=coreml_yolo.available_sizes([os.environ.get('CLEARCAM_MODEL_DIR'), 'models']) or ['t'],
       qwen_sizes=[2],          # only Qwen3-VL-2B is bundled
       reasons=dict(
           use_clip='Search by description needs the OpenCLIP model, which is not included in this build.',
-          model_sizes='This build includes the Tiny detection model only.',
+          model_sizes='That detection model is not included in this build.',
           qwen_sizes='This build includes the 2B description model only.'))
 
 
@@ -440,6 +441,7 @@ class VideoCapture:
       if time.time() - cam_check >= 5:
         cam_check = time.time()
         run_summary_if_due()
+        local_descriptions.backfill_if_idle(BASE_DIR / 'cameras')
         new_cams = camera_sources()
         for cam_name in new_cams.keys():
           if type(new_cams[cam_name]) != str: continue # todo find cause
@@ -581,6 +583,9 @@ class VideoCapture:
       return hls_proc, subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
   def save_object(self, p, ts=0, cam_name=None):
+    # Crops exist to feed the search index. With no search enabled they are
+    # write-only disk churn (~1 GB/day per camera), so skip them entirely.
+    if not (global_settings.use_clip or global_settings.use_face): return
     p = np.array([p.tlwh[0],p.tlwh[1],(p.tlwh[0]+p.tlwh[2]),(p.tlwh[1]+p.tlwh[3]),p.score,p.class_id,p.track_id])
     timestamp = "video" if self.vod[cam_name] else datetime.now().strftime("%Y-%m-%d")
     filepath = BASE_DIR / "cameras" / f"{cam_name}/objects/{timestamp}"
@@ -677,6 +682,13 @@ class VideoCapture:
         frame_num = self.frame_num[cam_name]
         last_frame_num = self.last_frame_num[cam_name]
         if self.raw_frame[cam_name] is None: return
+        # Tracking does not need every decoded frame: capping inference at
+        # DETECT_FPS cuts detection CPU by roughly the same ratio at no
+        # accuracy cost, since events are counted over seconds, not frames.
+        last_run = self.pipeline[cam_name].get('last_inference') or 0
+        if frame_num != last_frame_num and time.time() - last_run < 1.0 / DETECT_FPS:
+          self.last_frame_num[cam_name] = frame_num
+          return
         frame = self.raw_frame[cam_name].copy()
         if frame_num == last_frame_num:
           # Watchdog: a decoder can stay alive but stop producing frames (its
@@ -751,12 +763,14 @@ class VideoCapture:
                   if not self.vod[cam_name] and global_settings.use_qwen:
                     # Lead the description with the detection that fired the event.
                     trigger = max(filtered_preds, key=lambda p: p[4], default=None)
-                    prompt = None
+                    prompt, crop_path = None, None
                     if trigger is not None:
                       height, width = self.last_frames[cam_name][-1].shape[:2]
                       label = class_labels[int(trigger[5])] if int(trigger[5]) < len(class_labels) else None
                       prompt = trigger_prompt(label, trigger[:4], width, height)
-                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif, prompt=prompt)
+                      crop_path = write_trigger_crop(self.last_frames[cam_name][-1], trigger[:4], self.filename[cam_name])
+                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif,
+                                              prompt=prompt, image_override=crop_path)
                   self.last_det[cam_name] = time.time()
                   self.pipeline[cam_name]["last_event"] = time.time()
                   alert.last_det = time.time()
@@ -1604,7 +1618,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 if not event_image_path.exists(): continue
                 timeline = read_timeline(camera_dir / "streams" / selected_dir / "stream.m3u8")
                 event_images = sorted(
-                  event_image_path.glob("*.jpg"),
+                  (p for p in event_image_path.glob("*.jpg") if not p.name.endswith('.trigger.jpg')),
                   key=lambda p: p.stat().st_mtime,
                   reverse=True
                 )
