@@ -148,3 +148,43 @@ class CorrectionsTests(unittest.TestCase):
             (Path(folder) / 'yolo11s-home.mlpackage').mkdir()
             self.assertEqual(resolve_package([folder], 's').name, 'yolo11s-home.mlpackage')
             self.assertIsNone(resolve_package([folder], 'm'))
+
+
+class MlxDescriberTests(unittest.TestCase):
+    def test_local_model_dir_and_sizes_follow_what_is_on_disk(self):
+        import os, tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from utils import mlx_describer
+        with tempfile.TemporaryDirectory() as folder:
+            two = Path(folder) / 'mlx' / 'Qwen3-VL-2B-Instruct-4bit'
+            two.mkdir(parents=True); (two / 'config.json').write_text('{}')
+            with patch.dict(os.environ, CLEARCAM_MODEL_DIR=folder, CLEARCAM_NATIVE='1'):
+                self.assertEqual(mlx_describer.local_model_dir(2), two)
+                self.assertIsNone(mlx_describer.local_model_dir(8))
+                self.assertEqual(mlx_describer.available_sizes(), [2])
+            with patch.dict(os.environ, {'CLEARCAM_NATIVE': '0'}):
+                self.assertEqual(mlx_describer.available_sizes(), [2, 8])
+
+    def test_factory_prefers_mlx_when_present_and_honours_override(self):
+        import os
+        from unittest.mock import patch
+        from utils import local_descriptions, mlx_describer
+        from utils.qwen_process import QwenProcess
+        with patch.object(mlx_describer, 'runtime_available', return_value=True):
+            self.assertIs(local_descriptions.default_model_factory(), mlx_describer.MlxProcess)
+            with patch.dict(os.environ, CLEARCAM_DESCRIBER='tinygrad'):
+                self.assertIs(local_descriptions.default_model_factory(), QwenProcess)
+        with patch.object(mlx_describer, 'runtime_available', return_value=False):
+            self.assertIs(local_descriptions.default_model_factory(), QwenProcess)
+
+
+class MlxDownloadTests(unittest.TestCase):
+    def test_download_refuses_unknown_sizes_and_reports_idle(self):
+        import os, tempfile
+        from unittest.mock import patch
+        from utils import mlx_describer
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, CLEARCAM_DATA_DIR=folder):
+            with self.assertRaises(ValueError): mlx_describer.start_download(3)
+            self.assertEqual(mlx_describer.download_progress()['state'], 'idle')
+            self.assertTrue(str(mlx_describer.download_dir(8)).endswith('models/mlx/Qwen3-VL-8B-Instruct-4bit'))

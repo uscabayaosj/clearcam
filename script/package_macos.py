@@ -140,6 +140,40 @@ def main():
                                     'pyaml', 'yaml', '_yaml', 'typing_extensions')):
             if package.is_dir(): copy_tree(package, target_site / package.name)
             else: shutil.copy2(package, target_site / package.name)
+    # MLX description runtime: ~6x faster than tinygrad on Apple silicon. Copied
+    # from a site-packages that has it installed (CLEARCAM_MLX_SITE); skipped,
+    # with the tinygrad path remaining, when none is available.
+    mlx_site = os.environ.get('CLEARCAM_MLX_SITE')
+    mlx_bundled = False
+    if mlx_site and Path(mlx_site).is_dir():
+        for package in Path(mlx_site).iterdir():
+            if package.name.startswith(('mlx', 'mlx_vlm', 'mlx_metal', 'transformers', 'tokenizers', 'huggingface_hub',
+                                        'hf_xet', 'safetensors', 'jinja2', 'markupsafe', 'MarkupSafe', 'regex',
+                                        'sentencepiece', 'requests', 'urllib3', 'charset_normalizer', 'idna',
+                                        'certifi', 'filelock', 'fsspec', 'llguidance', 'scipy', 'miniaudio',
+                                        'mlx_audio', 'fastapi', 'starlette', 'pydantic', 'pydantic_core',
+                                        'annotated_types', 'typing_inspection', 'anyio', 'sniffio', 'websockets',
+                                        'python_multipart', 'multipart', 'uvicorn', 'click', 'h11', 'httpx',
+                                        'httpcore', 'shellingham', 'soundfile', '_soundfile', 'numba', 'llvmlite',
+                                        'einops', 'audiofile', 'audresample', 'audmath', 'librosa', 'soxr',
+                                        'joblib', 'threadpoolctl', 'scikit_learn', 'sklearn', 'decorator',
+                                        'lazy_loader', 'msgpack', 'pooch', 'platformdirs', 'yarl', 'multidict',
+                                        'aiohttp', 'aiosignal', 'frozenlist', 'attrs', 'propcache', 'aiohappyeyeballs')):
+                if package.name.startswith(('numpy', 'cv2', 'opencv', 'PIL', 'pillow', 'tqdm', 'packaging')): continue
+                if package.is_dir(): copy_tree(package, target_site / package.name)
+                else: shutil.copy2(package, target_site / package.name)
+        mlx_bundled = (target_site / 'mlx_vlm').is_dir() and (target_site / 'mlx').is_dir()
+    # transformers verifies its dependencies through package *metadata*, so the
+    # dist-info directories must travel with the packages or it refuses to import.
+    if mlx_bundled:
+        wanted = ('pyyaml', 'PyYAML', 'numpy', 'tokenizers', 'huggingface_hub', 'regex', 'requests', 'safetensors',
+                  'packaging', 'filelock', 'tqdm', 'transformers', 'mlx', 'mlx_vlm', 'mlx_metal', 'jinja2',
+                  'Jinja2', 'sentencepiece', 'pillow', 'Pillow', 'protobuf', 'typing_extensions', 'fsspec',
+                  'hf_xet', 'urllib3', 'certifi', 'charset_normalizer', 'idna', 'markupsafe', 'MarkupSafe')
+        for site in (source_site, Path(mlx_site)):
+            for info in site.glob('*.dist-info'):
+                if info.name.lower().startswith(tuple(w.lower() for w in wanted)) and not (target_site / info.name).exists():
+                    copy_tree(info, target_site / info.name)
     tools = resources / 'Tools'
     tools.mkdir()
     ffmpeg = shutil.which('ffmpeg')
@@ -149,7 +183,28 @@ def main():
     models.mkdir()
     from tinygrad.helpers import _ensure_downloads_dir
     inventory = []
-    for url in URLS:
+    bundle_urls = list(URLS)
+    if mlx_bundled:
+        snapshot = None
+        for root in (os.environ.get('CLEARCAM_MLX_MODELS'), Path.home() / '.cache/huggingface/hub'):
+            if not root: continue
+            base = Path(root) / 'models--mlx-community--Qwen3-VL-2B-Instruct-4bit' / 'snapshots'
+            if base.is_dir():
+                candidates = sorted(base.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True)
+                if candidates: snapshot = candidates[0]; break
+            if (Path(root) / 'Qwen3-VL-2B-Instruct-4bit' / 'config.json').is_file():
+                snapshot = Path(root) / 'Qwen3-VL-2B-Instruct-4bit'; break
+        if snapshot is None: raise RuntimeError('MLX runtime bundled but the Qwen3-VL-2B MLX snapshot is not in the HF cache')
+        target = models / 'mlx' / 'Qwen3-VL-2B-Instruct-4bit'
+        target.mkdir(parents=True)
+        total = 0
+        for item in snapshot.iterdir():
+            real = item.resolve()
+            shutil.copy2(real, target / item.name); total += real.stat().st_size
+        inventory.append(dict(url='mlx-community/Qwen3-VL-2B-Instruct-4bit', file='mlx/Qwen3-VL-2B-Instruct-4bit', bytes=total))
+        # The GGUF pair is the tinygrad fallback; with MLX aboard it would only double the download.
+        bundle_urls = [u for u in URLS if 'Qwen3-VL' not in u]
+    for url in bundle_urls:
         key = hashlib.md5(url.encode()).hexdigest()
         cached = _ensure_downloads_dir() / key
         if not cached.is_file(): raise RuntimeError(f'Required model must be prefetched on the build machine: {url}')
@@ -157,7 +212,7 @@ def main():
         with cached.open('rb') as stream: checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
         inventory.append(dict(url=url, file=key, bytes=cached.stat().st_size, sha256=checksum))
     binaries = relocate_libraries(resources)
-    (resources / 'build-manifest.json').write_text(json.dumps(dict(models=inventory, binaries=binaries, architecture='arm64', channel='local-alpha'), indent=2))
+    (resources / 'build-manifest.json').write_text(json.dumps(dict(models=inventory, binaries=binaries, architecture='arm64', channel='local-alpha', describer='mlx' if mlx_bundled else 'tinygrad'), indent=2))
     # Symlinks must remain within the app, including Python's command aliases.
     for link in app.rglob('*'):
         if link.is_symlink() and not link.resolve().is_relative_to(app.resolve()):

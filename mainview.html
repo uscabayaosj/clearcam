@@ -1896,6 +1896,12 @@
             <div id="settingsContainer" class="settings-rows">
               <p>Loading settings…</p>
             </div>
+            <div id="modelDownloadRow" class="setup-group" hidden>
+              <h4>Larger description model</h4>
+              <p class="setup-hint" id="modelDownloadHint"></p>
+              <button type="button" id="modelDownloadButton" onclick="startModelDownload()">Download 8B (5.4 GB)</button>
+              <p class="setup-hint" id="modelDownloadProgress" role="status"></p>
+            </div>
             <p id="settingsFeedback" role="alert"></p>
             <div class="form-actions settings-save">
               <button type="button" onclick="saveSettings()">Save changes</button>
@@ -4021,6 +4027,48 @@
       return capabilities;
     }
 
+    async function refreshModelDownloadRow() {
+      const row = document.getElementById('modelDownloadRow');
+      const caps = await loadCapabilities();
+      const offer = caps && caps.describer === 'mlx' && (caps.downloadable_qwen_sizes || []).includes(8);
+      let status = null;
+      try { status = await (await fetch('/download_status')).json(); } catch (_) {}
+      const downloading = status && status.state === 'downloading';
+      row.hidden = !(offer || downloading);
+      if (row.hidden) return;
+      document.getElementById('modelDownloadHint').textContent =
+        'Qwen3-VL-8B describes more accurately (about 20 s per event on this Mac). It is a 5.4 GB one-time download from Hugging Face, stored on this Mac.';
+      const button = document.getElementById('modelDownloadButton');
+      const progress = document.getElementById('modelDownloadProgress');
+      if (downloading) {
+        button.disabled = true;
+        const pct = status.approx_total ? Math.min(99, Math.round(100 * status.bytes / status.approx_total)) : null;
+        progress.textContent = pct === null ? 'Downloading…' : `Downloading… ${pct}% (${(status.bytes / 1e9).toFixed(1)} GB)`;
+        setTimeout(refreshModelDownloadRow, 3000);
+      } else if (status && status.state === 'error') {
+        button.disabled = false; progress.textContent = 'Download failed: ' + status.error;
+      } else if (status && status.state === 'ready') {
+        capabilities = null; progress.textContent = 'Ready. Choose 8B under Description model and save.';
+        button.disabled = true;
+        renderSettingsFresh();
+      } else { button.disabled = false; progress.textContent = ''; }
+    }
+    async function renderSettingsFresh() {
+      try { const res = await fetch('/get_global_settings'); if (res.ok) { await loadCapabilities(); renderSettings(await res.json()); } } catch (_) {}
+    }
+    async function startModelDownload() {
+      if (!(await askConfirm({
+        title: 'Download the 8B description model?',
+        body: 'This fetches 5.4 GB from huggingface.co once and keeps it on this Mac. Nothing about your cameras or recordings is sent; only the download request leaves this Mac.',
+        action: 'Download',
+      }))) return;
+      try {
+        const response = await fetch('/download_model?size=8');
+        if (!response.ok) { const b = await response.json().catch(() => null); throw new Error((b && b.error) || ''); }
+      } catch (error) { announce(error.message || 'The download could not start.', true); return; }
+      refreshModelDownloadRow();
+    }
+
     function showSettingsPanel(panelId) {
       document.querySelectorAll('.settings-tab').forEach(tab => {
         const selected = tab.dataset.panel === panelId;
@@ -4041,6 +4089,7 @@
       document.getElementById('settingsFeedback').textContent = '';
       showSettingsPanel(panelId || 'panelCameras');
       await loadCapabilities();
+      refreshModelDownloadRow();
       loadHousehold();
       loadSummaryState();
       fetchMaxStorage();
@@ -4085,7 +4134,7 @@
         "model_size": "Larger models spot small and distant objects more reliably and cost more of this Mac per frame. Only sizes included in this build are listed.",
         "model_res": "Higher detail helps with small or distant objects, at more processing cost.",
         "use_qwen": "Writes a short sentence about each event for the journal and notifications. Runs on this Mac; images stay local. Descriptions may be inaccurate.",
-        "qwen_size": "The larger model writes better descriptions and uses more memory. This build includes 2B.",
+        "qwen_size": "The larger model describes more accurately and takes longer per event. Only models present on this Mac are listed.",
         "userID": "Optional cloud notifications: only needed to receive alerts away from home. Saving sends this off the Mac.",
         "key": "Optional cloud notifications: encrypts event clips before upload. Saving sends this off the Mac."
       };
@@ -4128,10 +4177,11 @@
         }
         else if (key === "qwen_size") {
           input = document.createElement("select");
-          const allowedQwen = capabilities?.qwen_sizes || [2, 4];
+          const allowedQwen = capabilities?.qwen_sizes || [2, 4, 8];
           const qwenOptions = [
-            { value: 2, label: "2B" },
-            { value: 4, label: "4B" }
+            { value: 2, label: "2B — fast (about 6 s per event)" },
+            { value: 4, label: "4B" },
+            { value: 8, label: "8B — best (about 20 s per event)" }
           ].filter(opt => allowedQwen.includes(opt.value));
           qwenOptions.forEach(opt => {
             const option = document.createElement("option");

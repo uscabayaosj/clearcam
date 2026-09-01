@@ -78,6 +78,15 @@ def notifications_muted():
   return time.time() < notifications_muted_until
 
 
+def describer_sizes():
+  """Description models this build can run: MLX snapshots present, else the bundled 2B GGUF."""
+  from utils import mlx_describer
+  if mlx_describer.runtime_available():
+    sizes = mlx_describer.available_sizes()
+    if sizes: return sizes
+  return [2]
+
+
 def build_capabilities():
   """What this build can actually run, from the models it ships with.
 
@@ -85,12 +94,17 @@ def build_capabilities():
   refuse: an option that cannot work should look unavailable, not broken.
   """
   if os.environ.get('CLEARCAM_NATIVE') != '1':
-    return dict(use_clip=True, use_face=True, model_sizes=['t', 's', 'm', 'c', 'e'], qwen_sizes=[2, 4])
+    return dict(use_clip=True, use_face=True, model_sizes=['t', 's', 'm', 'c', 'e'], qwen_sizes=describer_sizes())
+  from utils import mlx_describer
+  mlx = mlx_describer.runtime_available()
+  present = describer_sizes()
   return dict(
       use_clip=False,          # OpenCLIP weights are not bundled
       use_face=True,           # AdaFace and BlazeFace are bundled
       model_sizes=coreml_yolo.available_sizes([os.environ.get('CLEARCAM_MODEL_DIR'), 'models']) or ['t'],
-      qwen_sizes=[2],          # only Qwen3-VL-2B is bundled
+      qwen_sizes=present,
+      describer='mlx' if mlx else 'tinygrad',
+      downloadable_qwen_sizes=[s for s in mlx_describer.REPOS if mlx and s not in present],
       reasons=dict(
           use_clip='Search by description needs the OpenCLIP model, which is not included in this build.',
           model_sizes='That detection model is not included in this build.',
@@ -1288,6 +1302,23 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 return
             self.send_200(dict(verdict=entry['verdict'], label=entry['label'],
                                total=len(corrections.load_corrections(BASE_DIR))))
+            return
+
+        if parsed_path.path == '/download_model':
+            from utils import mlx_describer
+            try:
+                size = int(query.get('size', ['0'])[0])
+                if not mlx_describer.runtime_available(): raise RuntimeError('The MLX runtime is not in this build.')
+                mlx_describer.start_download(size)
+            except (ValueError, RuntimeError) as error:
+                self.send_refusal(str(error))
+                return
+            self.send_200(mlx_describer.download_progress())
+            return
+
+        if parsed_path.path == '/download_status':
+            from utils import mlx_describer
+            self.send_200(mlx_describer.download_progress())
             return
 
         if parsed_path.path == '/capabilities':

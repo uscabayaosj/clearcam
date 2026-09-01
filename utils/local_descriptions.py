@@ -56,6 +56,20 @@ def write_trigger_crop(frame, box, event_path, margin=1.0, min_side=320):
         return None
 
 
+def default_model_factory():
+    """MLX when its runtime is present (6x faster on Apple silicon), else tinygrad.
+
+    CLEARCAM_DESCRIBER=tinygrad forces the old path for comparison.
+    """
+    import os
+    if os.environ.get('CLEARCAM_DESCRIBER') != 'tinygrad':
+        from utils import mlx_describer
+        if mlx_describer.runtime_available():
+            return mlx_describer.MlxProcess
+    from utils.qwen_process import QwenProcess
+    return QwenProcess
+
+
 def read_description(path):
     try:
         return json.loads(Path(path).with_suffix('.description.json').read_text()).get('description')
@@ -65,8 +79,7 @@ def read_description(path):
 class LocalDescriptions:
     def __init__(self, model_factory=None):
         if model_factory is None:
-            from utils.qwen_process import QwenProcess
-            model_factory = QwenProcess
+            model_factory = default_model_factory()
         self.model_factory = model_factory
         self.enabled = False
         self.size = 2
@@ -80,8 +93,8 @@ class LocalDescriptions:
         threading.Thread(target=self._run, daemon=True, name='LocalQwen').start()
 
     def configure(self, enabled, size=2):
-        if int(size) not in (2, 4):
-            raise ValueError('Qwen model size must be 2 or 4')
+        if int(size) not in (2, 4, 8):
+            raise ValueError('Description model size must be 2, 4, or 8')
         self.size, self.enabled = int(size), bool(enabled)
         self.state = 'waiting_for_event' if enabled else 'disabled'
         self.error = None
