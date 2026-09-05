@@ -3,7 +3,7 @@
 #
 # One-time setup (account holder, in a Terminal — the password is typed there,
 # never stored in this repo):
-#   xcrun notarytool store-credentials ClearCam --apple-id <Apple ID email> --team-id VT79XSZ6F8
+#   xcrun notarytool store-credentials ClearCam --apple-id <Apple ID email> --team-id XU3LCVCLZC
 # using an app-specific password from https://account.apple.com → Sign-In and
 # Security → App-Specific Passwords. The profile name can be overridden with
 # CLEARCAM_NOTARY_PROFILE. The app must have been packaged with a Developer ID
