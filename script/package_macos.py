@@ -29,11 +29,13 @@ def run(*args):
 
 
 def signing_identity():
-    """A stable local identity keeps TCC grants (Local Network) across rebuilds.
+    """Prefer a Developer ID, then the stable local certificate, then ad-hoc.
 
-    Prefers the self-signed 'ClearCam Local Signing' certificate when the user
-    has trusted it; otherwise falls back to ad-hoc signing, which macOS treats
-    as a new app on every rebuild. CLEARCAM_SIGN_IDENTITY overrides.
+    A Developer ID Application certificate is what notarization requires and
+    what lets Gatekeeper trust the app on another Mac. The self-signed
+    'ClearCam Local Signing' certificate keeps TCC grants (Local Network)
+    stable across rebuilds on Macs that have trusted it. Ad-hoc signing makes
+    macOS treat every rebuild as a new app. CLEARCAM_SIGN_IDENTITY overrides.
     """
     if override := os.environ.get('CLEARCAM_SIGN_IDENTITY'):
         return override
@@ -43,11 +45,47 @@ def signing_identity():
         return '-'
     # Sign by hash: a name is ambiguous the moment the certificate is imported
     # twice, and codesign refuses ambiguous names outright.
-    for line in identities.splitlines():
-        if 'ClearCam Local Signing' in line:
-            parts = line.split()
-            if len(parts) >= 2 and len(parts[1]) == 40: return parts[1]
+    for wanted in ('"Developer ID Application:', 'ClearCam Local Signing'):
+        for line in identities.splitlines():
+            if wanted in line:
+                parts = line.split()
+                if len(parts) >= 2 and len(parts[1]) == 40: return parts[1]
     return '-'
+
+
+def identity_is_developer_id(identity):
+    if identity == '-': return False
+    try:
+        return 'Developer ID Application' in run('/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning').split(identity, 1)[1].splitlines()[0]
+    except (subprocess.CalledProcessError, IndexError):
+        return False
+
+
+ENTITLEMENTS = ROOT / 'macos/ClearCam.entitlements'
+MH_EXECUTE = 2
+
+
+def is_executable_macho(path):
+    """Executables (not dylibs or extension modules) carry the entitlements."""
+    with path.open('rb') as stream: header = stream.read(16)
+    if header[:4] in (b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe'):
+        return int.from_bytes(header[12:16], 'little') == MH_EXECUTE
+    return path.suffix not in ('.dylib', '.so')   # fat binary: fall back to the name
+
+
+def sign(path, entitled=False):
+    """Sign with the hardened runtime; Developer ID builds also get a secure timestamp.
+
+    Notarization requires both on every Mach-O in the bundle, and entitlements
+    on every executable that needs them, so nested code is signed inside-out
+    here rather than with --deep (which does not propagate entitlements).
+    """
+    args = ['/usr/bin/codesign', '--force', '--sign', SIGN_IDENTITY]
+    if SIGN_IDENTITY != '-':
+        args += ['--options', 'runtime']
+        if SIGN_TIMESTAMP: args.append('--timestamp')
+        if entitled: args += ['--entitlements', str(ENTITLEMENTS)]
+    run(*args, str(path))
 
 
 def copy_tree(source, destination):
@@ -95,18 +133,20 @@ def relocate_libraries(resources):
             run('/usr/bin/install_name_tool', *changes, str(binary))
         if binary.suffix == '.dylib':
             run('/usr/bin/install_name_tool', '-id', '@rpath/' + binary.name, str(binary))
-        run('/usr/bin/codesign', '--force', '--sign', SIGN_IDENTITY, str(binary))
+        sign(binary, entitled=is_executable_macho(binary))
     return sorted(p.name for p in visited)
 
 
 SIGN_IDENTITY = signing_identity()
+SIGN_TIMESTAMP = identity_is_developer_id(SIGN_IDENTITY)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
     args = parser.parse_args()
-    print('Signing identity:', 'ad-hoc (permissions reset each rebuild)' if SIGN_IDENTITY == '-' else SIGN_IDENTITY)
+    print('Signing identity:', 'ad-hoc (permissions reset each rebuild)' if SIGN_IDENTITY == '-' else
+          f"{SIGN_IDENTITY} ({'Developer ID, timestamped, notarizable' if SIGN_TIMESTAMP else 'local certificate, hardened runtime'})")
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
     # Stage outside dist: iCloud's fileproviderd re-stamps Finder metadata on
@@ -232,7 +272,7 @@ def main():
     for attempt in range(5):
         try:
             strip_finder_metadata()
-            run('/usr/bin/codesign', '--force', '--deep', '--sign', SIGN_IDENTITY, str(app))
+            sign(app, entitled=True)
             strip_finder_metadata()
             run('/usr/bin/codesign', '--verify', '--deep', '--strict', str(app))
             break

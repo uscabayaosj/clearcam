@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened-runtime exceptions the bundled Python engine needs. Python's
+	     ctypes/libffi writes executable trampolines; tinygrad and MLX compile
+	     kernels at run time; extension modules from wheels are re-signed by us
+	     but library validation is relaxed so a mismatched vendor library
+	     fails loudly in a log rather than as a silent SIGKILL. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
