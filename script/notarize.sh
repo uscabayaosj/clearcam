@@ -14,8 +14,8 @@ APP="$ROOT/dist/ClearCam.app"
 OUT="${1:-$ROOT/dist/ClearCam-m1.zip}"
 PROFILE="${CLEARCAM_NOTARY_PROFILE:-ClearCam}"
 [ -d "$APP" ] || { echo "no $APP; build first (bash script/build_and_run.sh --build-only)" >&2; exit 1; }
-codesign -dv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application' \
-  || { echo "dist/ClearCam.app is not signed with a Developer ID certificate; notarization would be rejected." >&2; exit 1; }
+AUTHORITY="$(codesign -dvv "$APP" 2>&1 | grep 'Authority=' || true)"
+case "$AUTHORITY" in *"Developer ID Application"*) ;; *) echo "dist/ClearCam.app is not signed with a Developer ID certificate; notarization would be rejected." >&2; exit 1 ;; esac
 T="$(mktemp -d /tmp/clearcam-notarize.XXXXXX)"
 trap 'rm -rf "$T"' EXIT
 ditto --norsrc "$APP" "$T/ClearCam.app"
