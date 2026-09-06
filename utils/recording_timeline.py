@@ -13,14 +13,36 @@ def contained_path(root, relative):
     return target
 
 
-def read_timeline(playlist):
+_TIMELINE_CACHE = {}
+_TIMELINE_CACHE_LIMIT = 64
+
+
+def read_timeline(playlist, max_age=60):
+    """Parse a recording playlist into segment timings, incrementally.
+
+    A day's live playlist is append-only and grows to ~45,000 segments; the
+    journal polls it every few seconds, and stat-ing every segment each time
+    was the single largest cost of a poll. Lines already parsed are kept with
+    the parser state, so a poll only touches the segments added since. Every
+    max_age seconds the whole file is re-read so a segment removed from disk
+    drops out of the timeline within a minute.
+    """
+    import time
     playlist = Path(playlist)
     try:
         lines = playlist.read_text().splitlines()
     except OSError:
         return []
-    result, offset, duration, wall = [], 0.0, None, None
-    for line in lines:
+    key = str(playlist)
+    cached = _TIMELINE_CACHE.get(key)
+    if (cached and time.time() - cached['parsed_at'] <= max_age and cached['count'] <= len(lines)
+            and lines[:cached['count']] == cached['lines']):
+        result, offset, duration, wall = list(cached['result']), cached['offset'], cached['duration'], cached['wall']
+        start_at = cached['count']
+    else:
+        result, offset, duration, wall = [], 0.0, None, None
+        start_at = 0
+    for line in lines[start_at:]:
         if line.startswith('#EXT-X-DISCONTINUITY'):
             wall = None
         elif line.startswith('#EXT-X-PROGRAM-DATE-TIME:'):
@@ -53,6 +75,16 @@ def read_timeline(playlist):
             if wall is not None:
                 wall += duration
             duration = None
+    # Only a fully materialised prefix is worth remembering: a segment that was
+    # missing at parse time may appear on the next poll, so it stays unparsed.
+    if all(entry['exists'] for entry in result):
+        if len(_TIMELINE_CACHE) >= _TIMELINE_CACHE_LIMIT and key not in _TIMELINE_CACHE:
+            _TIMELINE_CACHE.pop(next(iter(_TIMELINE_CACHE)))
+        parsed_at = cached['parsed_at'] if cached and start_at else time.time()
+        _TIMELINE_CACHE[key] = dict(count=len(lines), lines=lines, result=list(result),
+                                    offset=offset, duration=duration, wall=wall, parsed_at=parsed_at)
+    else:
+        _TIMELINE_CACHE.pop(key, None)
     return result
 
 

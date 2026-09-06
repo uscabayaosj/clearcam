@@ -24,7 +24,7 @@ class RecordingTimelineTests(unittest.TestCase):
         self.assertIsNone(position_at(timeline, start + 60))
         self.assertEqual(position_at(timeline, start + 301), 3)
         (self.root / 'b.ts').unlink()
-        self.assertIsNone(position_at(read_timeline(playlist), start + 301))
+        self.assertIsNone(position_at(read_timeline(playlist, max_age=0), start + 301))
 
     def test_event_time_is_not_filename_or_engine_uptime(self):
         image = self.root / '900000000_notif.jpg'
@@ -90,6 +90,40 @@ class RecordingTimelineTests(unittest.TestCase):
         self.assertIn('#EXT-X-DISCONTINUITY-SEQUENCE:1', live)
         self.assertNotIn('#EXT-X-DISCONTINUITY\n', live)
         self.assertIsNone(live_playlist(self.root / 'missing.m3u8'))
+
+
+class IncrementalTimelineTests(unittest.TestCase):
+    def test_appended_segments_extend_the_cached_parse(self):
+        import tempfile, os, time
+        from utils import recording_timeline
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            playlist = root / 'stream.m3u8'
+            def write(n):
+                lines = ['#EXTM3U', '#EXT-X-TARGETDURATION:2']
+                for i in range(n):
+                    seg = root / f'seg_{i:06d}.ts'
+                    seg.write_bytes(b'x'); os.utime(seg, (1000 + 2 * i + 2, 1000 + 2 * i + 2))
+                    lines += ['#EXTINF:2.0,', seg.name]
+                playlist.write_text('\n'.join(lines) + '\n')
+            write(3)
+            first = recording_timeline.read_timeline(playlist)
+            self.assertEqual(len(first), 3)
+            write(5)
+            recording_timeline._TIMELINE_CACHE[str(playlist)]['result'][0]['marker'] = 'cached'  # prove reuse
+            second = recording_timeline.read_timeline(playlist)
+            self.assertEqual([s['offset'] for s in second], [0.0, 2.0, 4.0, 6.0, 8.0])
+            self.assertEqual(second[0].get('marker'), 'cached')
+            # a rewritten (shorter or different) playlist parses from scratch
+            write(2)
+            third = recording_timeline.read_timeline(playlist)
+            self.assertEqual(len(third), 2)
+            self.assertNotIn('marker', third[0])
+            # a listed segment that is not on disk keeps the prefix unparsed for next time
+            (root / 'seg_000001.ts').unlink()
+            fourth = recording_timeline.read_timeline(playlist, max_age=0)
+            self.assertFalse(fourth[1]['exists'])
+            self.assertNotIn(str(playlist), recording_timeline._TIMELINE_CACHE)
 
 
 class LiveWindowTargetDurationTests(unittest.TestCase):
