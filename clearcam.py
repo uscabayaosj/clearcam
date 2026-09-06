@@ -337,6 +337,20 @@ def draw_rectangle_numpy(img, pt1, pt2, color, thickness=1):
 
 def is_vod(cam_name): return (BASE_DIR / "cameras" / cam_name / "streams" / "video").is_dir()
 
+DECODE_MAX_WIDTH = max(640, int(os.environ.get('CLEARCAM_DECODE_MAX_WIDTH', '1280')))
+
+
+def detection_size(width, height):
+  """Decode size for detection: the model sees 640 px, so a 2304-wide native
+  frame is pure pipe traffic (9 MB per frame). Bounding the decode at 1280
+  wide keeps event images and description crops sharp while cutting the raw
+  video crossing the FFmpeg pipe, and the Python copies, by 3x on 2K cameras.
+  Even dimensions keep FFmpeg's scaler happy."""
+  if width <= DECODE_MAX_WIDTH: return width, height
+  scaled = max(2, round(height * DECODE_MAX_WIDTH / width))
+  return DECODE_MAX_WIDTH, scaled - (scaled % 2)
+
+
 def _get_stream_resolution(src):
   ffmpeg_path = find_ffmpeg()
   command = [ffmpeg_path, "-i", src]
@@ -417,7 +431,7 @@ class VideoCapture:
     self.output_dir_raw[cam_name] = BASE_DIR / "cameras" / f'{cam_name}' / "streams"
     self.last_preds[cam_name] = []
     self.raw_frame[cam_name] = None
-    self.width[cam_name], self.height[cam_name] = _get_stream_resolution(src)
+    self.width[cam_name], self.height[cam_name] = detection_size(*_get_stream_resolution(src))
     self.settings[cam_name] = None
     self.start_time[cam_name] = None
     
@@ -571,8 +585,7 @@ class VideoCapture:
             "-an",
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
-            "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",
-            "-fps_mode", "vfr",
+            "-vf", f"fps={DETECT_FPS:g},scale={self.width[cam_name]}:{self.height[cam_name]}",
             "-threads", "1",
             "-"
         ]
@@ -1126,6 +1139,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             return
           self.send_response(200)
           self.send_header("Content-Type", "application/javascript")
+          self.send_header("Cache-Control", "max-age=86400")  # pinned build; 540 KB otherwise re-read per page load
           self.end_headers()
           self.wfile.write(asset.read_bytes())
           return
@@ -1668,8 +1682,14 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               return
 
             image_data = []
-            for camera_dir in camera_dirs:
-              for selected_dir in selected_dirs:
+            # Days are the outer loop, newest first: the page is sorted by capture
+            # time, so once a full page has been collected no older day can
+            # contribute and the scan stops. Without this every poll read every
+            # sidecar of every day on disk.
+            needed = start + count
+            for selected_dir in sorted(selected_dirs, key=lambda d: '' if d == 'video' else d, reverse=True):
+              if len(image_data) >= needed: break
+              for camera_dir in camera_dirs:
                 event_image_path = camera_dir / "event_images" / selected_dir
                 if not event_image_path.exists(): continue
                 timeline = read_timeline(camera_dir / "streams" / selected_dir / "stream.m3u8")

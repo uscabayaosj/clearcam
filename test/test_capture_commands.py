@@ -19,6 +19,7 @@ class CaptureCommandTests(unittest.TestCase):
             'find_ffmpeg': lambda: '/test/ffmpeg',
             'subprocess': SimpleNamespace(Popen=popen, DEVNULL=-3, PIPE=-1),
             'time': SimpleNamespace(sleep=Mock(), time=lambda: 100),
+            'DETECT_FPS': 10.0,
         }
         exec(compile(ast.Module(body=[method], type_ignores=[]), '<capture>', 'exec'), namespace)
         camera = SimpleNamespace(
@@ -33,8 +34,9 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertIn('program_date_time', recorder[recorder.index('-hls_flags') + 1])
         self.assertNotEqual(recorder[recorder.index('-hls_segment_filename') + 1], '/test/streams/stream_%06d.ts')
         self.assertNotIn('-vsync', decoder)
-        self.assertIn('-fps_mode', decoder)
-        self.assertEqual(decoder[decoder.index('-fps_mode') + 1], 'vfr')
+        # FFmpeg drops to detection rate and scales before the pipe; Python no longer discards frames.
+        self.assertNotIn('-fps_mode', decoder)
+        self.assertEqual(decoder[decoder.index('-vf') + 1], 'fps=10,scale=1920:1080')
         self.assertEqual(decoder[decoder.index('-pix_fmt') + 1], 'bgr24')
         self.assertNotIn('-reconnect', decoder)  # local HLS, not an HTTP input
 

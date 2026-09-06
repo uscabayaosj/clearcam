@@ -21,35 +21,38 @@ colors:
 typography:
   display:
     fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Helvetica Neue, sans-serif"
-    fontSize: "clamp(1.8rem, 2.7vw, 2.7rem)"
-    fontWeight: 650
-    lineHeight: 1.1
-    letterSpacing: "-0.03em"
+    fontSize: "1.05rem"
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: "-0.01em"
   body:
     fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Helvetica Neue, sans-serif"
 rounded:
-  control: "9px"
-  panel: "15px"
+  control: "10px"
+  chip: "12px"
+  panel: "16px"
+  pill: "999px"
 spacing:
-  control-gap: "6px"
-  reel-gap: "18px"
-  section-gap: "42px"
+  control-gap: "4px"
+  reel-gap: "14px"
+  section-gap: "34px"
 components:
   button-primary:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
     padding: "11px 15px"
   camera-action:
-    backgroundColor: "{colors.ink-soft}"
-    textColor: "{colors.paper}"
-    width: "44px"
-    height: "44px"
-    rounded: "{rounded.control}"
+    backgroundColor: "transparent"
+    textColor: "{colors.paper-muted}"
+    hoverBackgroundColor: "{colors.ink-soft}"
+    width: "40px"
+    height: "40px"
+    rounded: "9px"
 ---
 
 # Design System: ClearCam
 
-Refreshed with approval on 30 August 2026. This records the corrected implementation while preserving the approved household-observatory direction.
+Refined on 6 September 2026 ("refined observatory", approved direction). The identity is unchanged; the chrome got quieter and denser so footage and the journal carry the page.
 
 ## Overview
 
@@ -84,13 +87,13 @@ Deep ink contains the interface; mineral paper gives review work a readable surf
 
 ## Typography
 
-System sans preserves the approved macOS familiarity. Display headings use the frontmatter's compact scale; section headings are medium weight, while supporting text remains subordinate without uppercase decoration.
+System sans preserves the approved macOS familiarity. There is no display heading any more: the product name sits at 1.05rem on one topbar line with its tagline, and section titles are small uppercase labels in dim paper (`.8rem`, `+0.02em`) so the content, not the chrome, is the largest thing on screen. Tabular numerals are set on `body`.
 
 **The Readable Form Rule.** Modal and mobile filter text stays at 16px. Adapt the layout rather than shrinking the complete dialog.
 
 ## Layout
 
-The wide shell uses a 76px navigation rail and content capped at 1320px. The header precedes the camera reel; the journal and system ledger follow. DOM order agrees with visual and keyboard order: journal first, ledger second.
+The wide shell uses a 72px translucent navigation rail (blurred ink, hairline seam) and content capped at 1360px. A single-line topbar (name, tagline, engine state pill, one primary action) precedes the camera grid; the journal and system ledger follow in a 1fr / 296px grid that stacks under 1080px. DOM order agrees with visual and keyboard order: journal first, ledger second.
 
 The wide reel scrolls horizontally. Ordinary cards use `clamp(280px, 32vw, 430px)`; the first or selected card expands to `clamp(540px, 62vw, 820px)`. Video has a 16:9 well. Three camera actions share an aligned row below it.
 
@@ -100,7 +103,7 @@ The journal's filter row, results and pagination are separate groups. Event card
 
 ## Elevation & Depth
 
-Tonal separation establishes the shell. The selected feed and dialogs use a restrained downward shadow. Borders establish panel edges; navigation and controls stay quiet at rest.
+Elevation is declared once per surface: camera cards and dialogs use an inset hairline (no outer border) plus, when selected or floating, one soft downward shadow. The paper journal floats on a single deep soft shadow. Dialog scrims and the rail use backdrop blur as a material, and fall back to solid ink under `prefers-reduced-transparency`. A global `[hidden]` rule outranks every component display rule.
 
 **The State Before Decoration Rule.** Health comes from the engine endpoint, not a decorative green dot. A live connection failure cannot be represented as successful monitoring just because old footage still plays.
 
