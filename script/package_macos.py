@@ -161,10 +161,13 @@ def main():
     plist = dict(CFBundleExecutable='ClearCam', CFBundleIdentifier='com.clearcam.mac.alpha',
                  CFBundleName='ClearCam', CFBundleDisplayName='ClearCam', CFBundlePackageType='APPL',
                  CFBundleShortVersionString='0.1.0', CFBundleVersion='1', LSMinimumSystemVersion='14.0',
-                 NSPrincipalClass='NSApplication', NSHighResolutionCapable=True,
+                 NSPrincipalClass='NSApplication', NSHighResolutionCapable=True, CFBundleIconFile='AppIcon',
                  NSLocalNetworkUsageDescription='ClearCam connects to your home cameras to record and detect events on this Mac.',
                  NSAppTransportSecurity={'NSAllowsLocalNetworking': True, 'NSAllowsArbitraryLoadsInWebContent': True})
     (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
+    icon = ROOT / 'macos/AppIcon.icns'   # built by script/make_icon.py, committed
+    if not icon.is_file(): raise RuntimeError('macos/AppIcon.icns is missing; run script/make_icon.py')
+    shutil.copy2(icon, resources / 'AppIcon.icns')
     engine = resources / 'Engine'
     engine.mkdir()
     for file in ['clearcam.py', 'mainview.html', 'LICENSE.md', 'requirements.txt']:
