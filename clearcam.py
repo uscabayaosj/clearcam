@@ -44,6 +44,7 @@ from utils import summaries
 from utils import corrections
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop
+from utils.event_dedupe import RecentTriggers
 import multiprocessing
 import re
 import base64
@@ -410,6 +411,7 @@ class VideoCapture:
     self.start_time = {}
     self.filename = {}
     self.alert_counters = {}
+    self.recent_triggers = {}   # per camera: what recently fired an event, for dedupe
     self.live_link = {}
     self.live_link_lock = {}
     self.pipeline = {}
@@ -764,6 +766,19 @@ class VideoCapture:
               window = alert.window if alert.window else (60 if alert.is_notif else 1)
               if alert.get_counts()[1]:
                 if time.time() - alert.last_det >= window and (time.time() - alert.last_det >= window):
+                  trigger = max(filtered_preds, key=lambda p: p[4], default=None)
+                  label_of = lambda p: class_labels[int(p[5])] if int(p[5]) < len(class_labels) else str(int(p[5]))
+                  if not self.vod[cam_name] and len(filtered_preds):
+                    # A subject that already fired an event and has not moved is
+                    # "still there", not news: no image, notification or description.
+                    # Anything new beside it still reports, and leads the description.
+                    recent = self.recent_triggers.setdefault(cam_name, RecentTriggers())
+                    trigger = recent.novel(filtered_preds, label_of)
+                    if trigger is None:
+                      alert.last_det = time.time()
+                      self.pipeline[cam_name]["suppressed_events"] = self.pipeline[cam_name].get("suppressed_events", 0) + 1
+                      continue
+                    recent.remember(trigger, label_of(trigger))
                   timestamp = "video" if self.vod[cam_name] else datetime.now().strftime("%Y-%m-%d")
                   filepath = BASE_DIR / "cameras" / f"{cam_name}/event_images/{timestamp}"
                   filepath.mkdir(parents=True, exist_ok=True)
@@ -777,7 +792,7 @@ class VideoCapture:
                   if not self.vod[cam_name]:
                     try:
                       fh, fw = self.last_frames[cam_name][-1].shape[:2]
-                      top = max(range(len(filtered_preds)), key=lambda i: filtered_preds[i][4]) if len(filtered_preds) else None
+                      top = next((i for i, p in enumerate(filtered_preds) if trigger is not None and np.array_equal(p, trigger)), None)
                       corrections.write_detections(self.filename[cam_name], filtered_preds, class_labels, fw, fh, top)
                     except Exception as error:
                       print('detections sidecar failed:', error)
@@ -795,7 +810,6 @@ class VideoCapture:
                     threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
                   if not self.vod[cam_name] and global_settings.use_qwen:
                     # Lead the description with the detection that fired the event.
-                    trigger = max(filtered_preds, key=lambda p: p[4], default=None)
                     prompt, crop_path = None, None
                     if trigger is not None:
                       height, width = self.last_frames[cam_name][-1].shape[:2]
