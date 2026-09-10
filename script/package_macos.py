@@ -88,6 +88,37 @@ def sign(path, entitled=False):
     run(*args, str(path))
 
 
+def materialise_icloud(*roots):
+    """Pull back files iCloud has evicted from the build inputs before copying.
+
+    The repo and its virtualenv live under ~/Documents, which "Optimize Mac
+    Storage" quietly evicts; copying an evicted file downloads it first, so a
+    build that should take four minutes crawls at one file per second. Ask
+    iCloud for everything up front and wait until nothing is dataless.
+    """
+    import time
+    def dataless(root):
+        try:
+            out = subprocess.run(['/usr/bin/find', str(root), '-type', 'f', '-flags', '+dataless'],
+                                 capture_output=True, text=True).stdout
+        except OSError:
+            return []
+        return [line for line in out.splitlines() if line]
+    pending = [f for root in roots if Path(root).exists() for f in dataless(root)]
+    if not pending: return
+    print(f'iCloud has evicted {len(pending)} build input files; downloading them first…', flush=True)
+    for start in range(0, len(pending), 200):
+        subprocess.run(['/usr/bin/brctl', 'download', *pending[start:start + 200]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + 1800
+    while time.time() < deadline:
+        remaining = sum(len(dataless(root)) for root in roots if Path(root).exists())
+        if not remaining: break
+        print(f'  {remaining} still downloading…', flush=True)
+        time.sleep(10)
+    else:
+        raise RuntimeError('iCloud is still evicting build inputs after 30 minutes; keep this folder available offline')
+
+
 def copy_tree(source, destination):
     shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store'))
@@ -149,6 +180,8 @@ def main():
           f"{SIGN_IDENTITY} ({'Developer ID, timestamped, notarizable' if SIGN_TIMESTAMP else 'local certificate, hardened runtime'})")
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
+    materialise_icloud(ROOT / '.venv', *(ROOT / d for d in ('detection', 'llm', 'models', 'utils', 'vendor', 'ocsort_tracker', 'macos')),
+                       *( [os.environ['CLEARCAM_MLX_SITE']] if os.environ.get('CLEARCAM_MLX_SITE') else []))
     # Stage outside dist: iCloud's fileproviderd re-stamps Finder metadata on
     # bundles inside synced folders (like ~/Documents), racing codesign forever.
     stage = Path(tempfile.mkdtemp(prefix='ClearCam-build-'))
