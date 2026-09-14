@@ -42,6 +42,15 @@ class CoreMLYolo:
         self.model = ct.models.MLModel(str(package_path))
         self.confidence = confidence
         self.iou = iou
+        self.names = None
+        try:
+            import ast
+            raw = self.model.user_defined_metadata.get('names')
+            if raw:
+                parsed = ast.literal_eval(raw)
+                self.names = [parsed[i] for i in sorted(parsed, key=int)]
+        except Exception:
+            self.names = None
 
     def __call__(self, frame_bgr):
         frame_bgr = np.asarray(frame_bgr)

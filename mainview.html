@@ -668,6 +668,7 @@
           <button type="button" role="tab" class="settings-tab" data-panel="panelAI" aria-selected="false">Detection &amp; AI</button>
           <button type="button" role="tab" class="settings-tab" data-panel="panelSummary" aria-selected="false">Daily summary</button>
           <button type="button" role="tab" class="settings-tab" data-panel="panelHousehold" aria-selected="false">Household</button>
+          <button type="button" role="tab" class="settings-tab" data-panel="panelTraining" aria-selected="false">Training data</button>
         </div>
 
         <div class="settings-panels">
@@ -748,6 +749,32 @@
               <h4>Household</h4>
               <p class="setup-hint">Name people from their journal events using the person button on an event; recognized names then appear on future events and notifications. Faces never leave this Mac.</p>
               <ul id="householdList" class="household-list"></ul>
+            </div>
+          </section>
+
+          <section id="panelTraining" class="settings-panel" role="tabpanel" hidden>
+            <div class="setup-group">
+              <h4>Roboflow</h4>
+              <p class="setup-hint">Optional. Sends the events you correct, with their boxes, to a Roboflow project so you can fix labels and add new object types like packages, then train a better detector for this home. Only corrected events are sent; live video never leaves this Mac.</p>
+              <div class="setting-row">
+                <span class="switch"><input type="checkbox" id="roboflowEnabled" aria-label="Send corrections to Roboflow"><span class="switch-knob" aria-hidden="true"></span></span>
+                <label for="roboflowEnabled">Send corrections to Roboflow</label>
+              </div>
+              <form id="roboflowForm">
+                <label for="roboflowWorkspace">Workspace</label>
+                <input id="roboflowWorkspace" type="text" name="workspace" placeholder="your-workspace" maxlength="100" autocomplete="off">
+                <label for="roboflowProject">Project</label>
+                <input id="roboflowProject" type="text" name="project" placeholder="clearcam-home" maxlength="100" autocomplete="off">
+                <label for="roboflowKey">API key</label>
+                <div class="secret-field">
+                  <input id="roboflowKey" type="password" name="api_key" placeholder="Private API key" maxlength="200" autocomplete="off">
+                  <button type="button" class="secret-toggle" data-reveals="roboflowKey" aria-label="Show API key">Show</button>
+                </div>
+                <p class="setup-hint">Found under Settings &gt; API Keys in Roboflow. Stored only on this Mac.</p>
+                <button type="submit">Save</button>
+              </form>
+              <p id="roboflowStatus" role="status"></p>
+              <button type="button" class="modal-quiet" id="roboflowSyncButton" onclick="syncRoboflow()">Upload pending corrections</button>
             </div>
           </section>
         </div>
@@ -2906,7 +2933,10 @@
     }
     document.addEventListener('click', (event) => {
       const tab = event.target.closest('.settings-tab');
-      if (tab) showSettingsPanel(tab.dataset.panel);
+      if (tab) {
+        showSettingsPanel(tab.dataset.panel);
+        if (tab.dataset.panel === 'panelTraining') loadRoboflowState();
+      }
     });
 
     async function openSettingsModal(panelId) {
@@ -2918,6 +2948,7 @@
       refreshModelDownloadRow();
       loadHousehold();
       loadSummaryState();
+      loadRoboflowState();
       fetchMaxStorage();
 
       const container = document.getElementById("settingsContainer");
@@ -3576,6 +3607,69 @@
     loadSummaryState();
     pollVisible(loadSummaryState, 60000);
 
+    function roboflowStatusLine(status, enabled) {
+      if (!enabled) return 'Off. Corrections stay on this Mac.';
+      let line = `${status.uploaded_total || 0} of ${status.total_corrections || 0} corrections uploaded`;
+      if (status.pending) line += ` · ${status.pending} waiting`;
+      if (status.last_error) line += ` · last error: ${status.last_error}`;
+      if (status.syncing) line += ' · Uploading…';
+      return line;
+    }
+    async function loadRoboflowState() {
+      const statusLine = document.getElementById('roboflowStatus');
+      try {
+        const response = await fetch('/roboflow_config');
+        if (!response.ok) throw new Error();
+        const config = await response.json();
+        const enabledBox = document.getElementById('roboflowEnabled');
+        const workspace = document.getElementById('roboflowWorkspace');
+        const project = document.getElementById('roboflowProject');
+        const key = document.getElementById('roboflowKey');
+        if (enabledBox) enabledBox.checked = !!config.enabled;
+        if (workspace && document.activeElement !== workspace) workspace.value = config.workspace || '';
+        if (project && document.activeElement !== project) project.value = config.project || '';
+        if (key && document.activeElement !== key) key.placeholder = config.has_key ? `Saved key ending …${config.key_hint}` : 'Private API key';
+        if (statusLine) statusLine.textContent = roboflowStatusLine(config.status || {}, !!config.enabled);
+      } catch (_) {
+        if (statusLine) statusLine.textContent = 'Roboflow status unavailable.';
+      }
+    }
+    async function saveRoboflowConfig(event) {
+      if (event) event.preventDefault();
+      const body = {
+        enabled: document.getElementById('roboflowEnabled').checked,
+        workspace: document.getElementById('roboflowWorkspace').value.trim(),
+        project: document.getElementById('roboflowProject').value.trim(),
+      };
+      const key = document.getElementById('roboflowKey').value;
+      if (key) body.api_key = key;
+      try {
+        const response = await fetch('/roboflow_config', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Roboflow settings were not saved.');
+        document.getElementById('roboflowKey').value = '';
+        announce('Roboflow settings saved.');
+        loadRoboflowState();
+      } catch (error) {
+        announce(error.message || 'Roboflow settings were not saved.', true);
+      }
+    }
+    document.getElementById('roboflowForm').addEventListener('submit', saveRoboflowConfig);
+    document.getElementById('roboflowEnabled').addEventListener('change', saveRoboflowConfig);
+    async function syncRoboflow() {
+      try {
+        const response = await fetch('/roboflow_sync');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not start the Roboflow upload.');
+        announce('Uploading corrections to Roboflow…');
+      } catch (error) {
+        announce(error.message || 'Could not start the Roboflow upload.', true);
+      }
+      setTimeout(loadRoboflowState, 3000);
+    }
+
     async function refreshLocalAIStatus() {
       const target = document.getElementById('localAIState');
       try {
@@ -3592,6 +3686,11 @@
     }
     refreshLocalAIStatus();
     pollVisible(refreshLocalAIStatus, 10000);
+    pollVisible(() => {
+      const modal = document.getElementById('settingsModal');
+      const panel = document.getElementById('panelTraining');
+      if (modal && modal.style.display === 'flex' && panel && !panel.hidden) loadRoboflowState();
+    }, 15000);
   </script>
 </body>
 </html>

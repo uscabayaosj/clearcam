@@ -27,6 +27,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from utils import roboflow_sync
 COCO = [l.strip() for l in (ROOT / 'models' / 'coco.names').read_text().splitlines() if l.strip()] if (ROOT / 'models' / 'coco.names').exists() else None
 
 
@@ -43,17 +45,20 @@ def to_yolo_line(cls, box, width, height):
     return f"{cls} {cx:.6f} {cy:.6f} {(x2 - x1) / width:.6f} {(y2 - y1) / height:.6f}"
 
 
-def assemble(data_root, out_dir, names, teacher=None, min_corrections=20):
+def assemble(data_root, out_dir, names, teacher=None, min_corrections=20, skip_gate=False):
     from PIL import Image
     store = data_root / 'corrections'
     rows = [json.loads(l) for l in (store / 'corrections.jsonl').read_text().splitlines() if l.strip()] if (store / 'corrections.jsonl').exists() else []
     disagreements = sum(1 for r in rows if r['verdict'] != 'confirm')
     # "Looks right" alone is the model grading its own homework: only verdicts
     # that disagree with it carry information the fine-tune can learn from.
-    if len(rows) < min_corrections or disagreements < max(1, min_corrections // 2):
+    # When a Roboflow dataset is supplied there is external data to train on,
+    # so the local-corrections gate is informational only, not a hard stop.
+    if not skip_gate and (len(rows) < min_corrections or disagreements < max(1, min_corrections // 2)):
         sys.exit(f'{len(rows)} corrections recorded, {disagreements} of them disagreements (Not a … / It was actually …). '
                  f'Training needs at least {min_corrections} in total with {max(1, min_corrections // 2)} disagreements; '
                  'confirmations alone would only reinforce what the detector already believes.')
+    print(f'local corrections: {len(rows)} recorded, {disagreements} disagreements')
     images_dir, labels_dir = out_dir / 'images', out_dir / 'labels'
     for d in (images_dir, labels_dir): d.mkdir(parents=True, exist_ok=True)
     name_to_idx = {n: i for i, n in enumerate(names)}
@@ -96,6 +101,8 @@ def main():
     parser.add_argument('--teacher', default='yolo11m.pt', help="'none' to skip teacher relabeling")
     parser.add_argument('--out', default=None)
     parser.add_argument('--min-corrections', type=int, default=20)
+    parser.add_argument('--roboflow-version', type=int, default=None,
+                         help='Pull this Roboflow dataset version and merge it with the local corrections.')
     args = parser.parse_args()
     from ultralytics import YOLO
     data_root = Path(args.data).expanduser()
@@ -104,8 +111,63 @@ def main():
     base = YOLO(f'yolo11{args.size}.pt')
     names = [base.names[i] for i in range(len(base.names))]
     teacher = None if args.teacher == 'none' else YOLO(args.teacher)
-    yaml, counts, total = assemble(data_root, work / 'dataset', names, teacher, args.min_corrections)
+
+    roboflow_train_dir = roboflow_val_dir = None
+    if args.roboflow_version is not None:
+        cfg = roboflow_sync.load_config(data_root)
+        missing = [k for k in ('api_key', 'workspace', 'project') if not cfg.get(k)]
+        if missing:
+            sys.exit(f'--roboflow-version needs Roboflow config: missing {", ".join(missing)} '
+                      f'(set it via {roboflow_sync.CONFIG_FILE} under {data_root}).')
+        roboflow_work = work / 'roboflow'
+        if roboflow_work.exists(): shutil.rmtree(roboflow_work)
+        data_yaml_path = roboflow_sync.download_dataset(cfg, args.roboflow_version, roboflow_work)
+        parsed = roboflow_sync.read_yaml_names(data_yaml_path)
+        merged_names = roboflow_sync.merge_class_names(names, parsed['names'])
+        new_names = [n for n in parsed['names'] if n not in names]
+        rf_index_map = {i: merged_names.index(n) for i, n in enumerate(parsed['names'])}
+
+        for split, src in (('train', parsed['train']), ('val', parsed['val'])):
+            if not src or not Path(src).is_dir():
+                continue
+            labels_src = Path(src).parent / 'labels'
+            if not labels_src.is_dir():
+                continue
+            remapped_labels = roboflow_work / f'{split}_labels_remapped'
+            roboflow_sync.remap_yolo_labels(labels_src, remapped_labels, rf_index_map)
+            # Point a sibling 'labels' dir at the remapped labels, alongside the
+            # original images dir, matching Ultralytics' images/labels layout.
+            images_dst = roboflow_work / split / 'images'
+            images_dst.parent.mkdir(parents=True, exist_ok=True)
+            if images_dst.exists() or images_dst.is_symlink():
+                images_dst.unlink() if images_dst.is_symlink() else shutil.rmtree(images_dst)
+            images_dst.symlink_to(Path(src).resolve())
+            labels_dst = roboflow_work / split / 'labels'
+            if labels_dst.exists() or labels_dst.is_symlink():
+                labels_dst.unlink() if labels_dst.is_symlink() else shutil.rmtree(labels_dst)
+            labels_dst.symlink_to(remapped_labels.resolve())
+            if split == 'train':
+                roboflow_train_dir = images_dst
+            else:
+                roboflow_val_dir = images_dst
+        names = merged_names
+        print(f'roboflow dataset v{args.roboflow_version}: {len(parsed["names"])} classes, '
+              f'{len(new_names)} new to the merged set: {new_names}')
+
+    yaml, counts, total = assemble(data_root, work / 'dataset', names, teacher, args.min_corrections,
+                                    skip_gate=roboflow_train_dir is not None)
     print(f'dataset: {total} corrections -> {counts}')
+    print(f'final class count: {len(names)}')
+
+    if roboflow_train_dir is not None:
+        local_images_dir = (work / 'dataset' / 'images').resolve()
+        val_dir = roboflow_val_dir if roboflow_val_dir is not None else local_images_dir
+        yaml.write_text(
+            f"path: {work / 'dataset'}\n"
+            f"train:\n  - {local_images_dir}\n  - {roboflow_train_dir.resolve()}\n"
+            f"val: {val_dir}\n"
+            "names:\n" + ''.join(f"  {i}: {n}\n" for i, n in enumerate(names))
+        )
     # Frozen backbone + small LR: adapt to these cameras, keep COCO knowledge.
     base.train(data=str(yaml), epochs=args.epochs, imgsz=640, device='mps', freeze=10, lr0=0.001,
                batch=8, project=str(work), name='run', exist_ok=True, verbose=False, plots=False)

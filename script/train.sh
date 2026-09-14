@@ -3,10 +3,15 @@
 #   script/train.sh            # fine-tunes the Small detector (default in Settings)
 #   script/train.sh n          # or the Nano one
 #   script/train.sh s 30       # size and epochs
+#   ROBOFLOW_VERSION=3 script/train.sh   # also merge in Roboflow dataset version 3
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SIZE="${1:-s}"; EPOCHS="${2:-20}"
 DATA="${CLEARCAM_DATA_DIR:-$HOME/Library/Application Support/ClearCam/Data}"
 [ -x "$ROOT/.venv-train/bin/python" ] || { echo "Run script/setup_training.sh once first." >&2; exit 1; }
+EXTRA_ARGS=()
+if [ -n "${ROBOFLOW_VERSION:-}" ]; then
+  EXTRA_ARGS+=(--roboflow-version "$ROBOFLOW_VERSION")
+fi
 # Work inside the data directory so downloaded checkpoints never land in the repo.
-mkdir -p "$DATA/training" && cd "$DATA/training" && exec "$ROOT/.venv-train/bin/python" "$ROOT/script/train_from_corrections.py" --data "$DATA" --size "$SIZE" --epochs "$EPOCHS"
+mkdir -p "$DATA/training" && cd "$DATA/training" && exec "$ROOT/.venv-train/bin/python" "$ROOT/script/train_from_corrections.py" --data "$DATA" --size "$SIZE" --epochs "$EPOCHS" "${EXTRA_ARGS[@]}"

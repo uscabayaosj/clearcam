@@ -18,6 +18,17 @@ def make_detector(model_size, model_res):
         print('Core ML unavailable, using tinygrad YOLO:', error)
   print('Detection: tinygrad YOLO', model_size)
   return YOLOv9(model_size, model_res)
+
+
+def apply_model_class_names(model, class_labels, color_dict):
+  """A fine-tuned -home model can add classes (e.g. 'package'); mirror its names everywhere."""
+  names = getattr(model, 'names', None)
+  if not names: return
+  if list(names) != list(class_labels):
+    print(f'Detection: model reports {len(names)} classes (was {len(class_labels)})')
+  class_labels[:] = names
+  color_dict.clear()
+  color_dict.update({label: tuple((((i+1) * 50) % 256, ((i+1) * 100) % 256, ((i+1) * 150) % 256)) for i, label in enumerate(class_labels)})
 import numpy as np
 from pathlib import Path
 import cv2
@@ -53,6 +64,7 @@ import pickle
 import signal
 import math
 from utils.recording_timeline import contained_path, read_timeline, event_timing, write_event_time, expired_recording_dirs, position_at, live_playlist
+from utils import roboflow_sync
 
 # RTSP URL
 # Video capture thread
@@ -1328,8 +1340,29 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             except ValueError as error:
                 self.send_refusal(str(error) or 'Invalid correction')
                 return
+            try:
+                if roboflow_sync.load_config(BASE_DIR).get('enabled'):
+                    roboflow_sync.sync_in_background(BASE_DIR, class_labels)
+            except Exception as error:
+                print('Roboflow sync-on-correction failed to start:', error)
             self.send_200(dict(verdict=entry['verdict'], label=entry['label'],
                                total=len(corrections.load_corrections(BASE_DIR))))
+            return
+
+        if parsed_path.path == '/roboflow_sync':
+            config = roboflow_sync.load_config(BASE_DIR)
+            if not config.get('enabled') or not config.get('project') or not config.get('api_key'):
+                self.send_refusal('Turn on Roboflow uploads and enter the workspace, project and API key first.')
+                return
+            roboflow_sync.sync_in_background(BASE_DIR, class_labels)
+            self.send_200(roboflow_sync.status(BASE_DIR))
+            return
+
+        if parsed_path.path == '/roboflow_config':
+            config = roboflow_sync.load_config(BASE_DIR)
+            body = roboflow_sync.public_config(config)
+            body['status'] = roboflow_sync.status(BASE_DIR)
+            self.send_200(body)
             return
 
         if parsed_path.path == '/download_model':
@@ -1582,6 +1615,40 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path)
+
+        if parsed_path.path == '/roboflow_config':
+          content_length = int(self.headers.get('Content-Length', 0))
+          try:
+            data = json.loads(self.rfile.read(content_length) or b'{}')
+          except json.JSONDecodeError:
+            self.send_refusal('Invalid JSON')
+            return
+          updates = {}
+          if 'enabled' in data:
+            if not isinstance(data['enabled'], bool):
+              self.send_refusal('enabled must be true or false')
+              return
+            updates['enabled'] = data['enabled']
+          name_re = re.compile(r'^[A-Za-z0-9_-]{0,100}$')
+          for field in ('workspace', 'project'):
+            if field in data:
+              value = data[field]
+              if not isinstance(value, str) or not name_re.match(value):
+                self.send_refusal(f'{field} may only contain letters, numbers, "_" and "-" (max 100 characters)')
+                return
+              updates[field] = value
+          if 'api_key' in data:
+            value = data['api_key']
+            if not isinstance(value, str) or len(value) > 200:
+              self.send_refusal('api_key must be a string of at most 200 characters')
+              return
+            if value:
+              updates['api_key'] = value
+          config = roboflow_sync.save_config(BASE_DIR, updates)
+          body = roboflow_sync.public_config(config)
+          body['status'] = roboflow_sync.status(BASE_DIR)
+          self.send_200(body)
+          return
 
         if self.path.startswith("/edit_settings"):
           content_length = int(self.headers.get('Content-Length', 0))
@@ -1848,6 +1915,7 @@ def set_settings(x): # todo, save to db, do logic in GlobalSettings class, sanit
   if x.model_size != global_settings.model_size or x.model_res != global_settings.model_res:
     yolo_jit_cache = {}
     model = make_detector(x.model_size, x.model_res)
+    apply_model_class_names(model, class_labels, color_dict)
 
   if x.key == None: # cloud notifications require a key; local AI does not
     x.userID = None
@@ -2001,6 +2069,7 @@ if __name__ == "__main__":
     database.run_put("global_settings", "all", global_settings)
 
   model = make_detector(global_settings.model_size, int(global_settings.model_res))
+  apply_model_class_names(model, class_labels, color_dict)
   object_finder = ObjectFinder()
   cam = VideoCapture()
 
