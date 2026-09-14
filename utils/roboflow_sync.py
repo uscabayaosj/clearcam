@@ -395,6 +395,27 @@ def download_dataset(cfg, version, dest_dir, opener=None):
 
 # ------------------------------------------------------------------- class/label ops
 
+def normalise_slug(value, field='workspace'):
+    """Accept what people actually paste: a slug, a display name, or a project URL.
+
+    Roboflow identifies workspaces and projects by URL slugs (lowercase,
+    digits, hyphens). 'https://app.roboflow.com/my-ws/clearcam-home/1' gives
+    my-ws for the workspace and clearcam-home for the project; 'My Home' becomes
+    my-home. Empty input clears the field.
+    """
+    import re
+    text = (value or '').strip()
+    if not text: return ''
+    match = re.search(r'roboflow\.com/([^/?#]+)(?:/([^/?#]+))?', text)
+    if match:
+        text = match.group(1) if field == 'workspace' else (match.group(2) or match.group(1))
+    slug = re.sub(r'[^a-z0-9-]+', '-', text.lower()).strip('-')
+    slug = re.sub(r'-{2,}', '-', slug)
+    if not slug or len(slug) > 100:
+        raise ValueError(f'{field} must be the Roboflow URL name (letters, numbers and dashes), at most 100 characters')
+    return slug
+
+
 def merge_class_names(base, extra):
     out = list(base)
     existing = set(base)

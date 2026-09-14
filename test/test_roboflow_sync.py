@@ -113,6 +113,16 @@ def write_correction_store(data_root, entries):
             f.write(json.dumps(entry) + '\n')
 
 
+class SlugTests(unittest.TestCase):
+    def test_slugs_from_urls_names_and_plain_values(self):
+        self.assertEqual(rs.normalise_slug('https://app.roboflow.com/my-ws/clearcam-home/1', 'workspace'), 'my-ws')
+        self.assertEqual(rs.normalise_slug('https://app.roboflow.com/my-ws/clearcam-home/1', 'project'), 'clearcam-home')
+        self.assertEqual(rs.normalise_slug('Ulysses Cabayao', 'workspace'), 'ulysses-cabayao')
+        self.assertEqual(rs.normalise_slug('  clearcam-home ', 'project'), 'clearcam-home')
+        self.assertEqual(rs.normalise_slug('', 'project'), '')
+        with self.assertRaises(ValueError): rs.normalise_slug('***', 'project')
+
+
 class SyncTests(unittest.TestCase):
     def test_requests_match_the_roboflow_sdk_shape(self):
         with tempfile.TemporaryDirectory() as tmp:

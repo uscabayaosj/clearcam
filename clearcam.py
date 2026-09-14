@@ -1629,14 +1629,17 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               self.send_refusal('enabled must be true or false')
               return
             updates['enabled'] = data['enabled']
-          name_re = re.compile(r'^[A-Za-z0-9_-]{0,100}$')
           for field in ('workspace', 'project'):
             if field in data:
               value = data[field]
-              if not isinstance(value, str) or not name_re.match(value):
-                self.send_refusal(f'{field} may only contain letters, numbers, "_" and "-" (max 100 characters)')
+              if not isinstance(value, str):
+                self.send_refusal(f'{field} must be text')
                 return
-              updates[field] = value
+              try:
+                updates[field] = roboflow_sync.normalise_slug(value, field)
+              except ValueError as error:
+                self.send_refusal(str(error))
+                return
           if 'api_key' in data:
             value = data['api_key']
             if not isinstance(value, str) or len(value) > 200:
