@@ -310,8 +310,14 @@ def _prepare_external_dataset(key, data_yaml_path, index_map, out_root, teacher,
         images_out.mkdir(parents=True, exist_ok=True)
         labels_out.mkdir(parents=True, exist_ok=True)
         n_images = n_orig = n_teacher = 0
-        predictions = (teacher.predict([str(x) for x in image_paths], conf=0.5, verbose=False, stream=True)
-                       if teacher is not None and image_paths else iter(()))
+        # Teacher in small batches: given the whole list at once, the library
+        # treats it as ONE batch and loads every image into memory (a
+        # 6,000-image dataset got the process killed).
+        def teacher_results(paths, batch=16):
+            for i in range(0, len(paths), batch):
+                chunk = paths[i:i + batch]
+                yield from teacher.predict([str(x) for x in chunk], conf=0.5, verbose=False, batch=len(chunk), device='mps')
+        predictions = teacher_results(image_paths) if teacher is not None and image_paths else iter(())
         for img_path in image_paths:
             result = next(predictions, None) if teacher is not None else None
             link = images_out / img_path.name
