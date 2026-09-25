@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SIZE="${1:-s}"; EPOCHS="${2:-}"
 DATA="${CLEARCAM_DATA_DIR:-$HOME/Library/Application Support/ClearCam/Data}"
-[ -x "$ROOT/.venv-train/bin/python" ] || { echo "Run script/setup_training.sh once first." >&2; exit 1; }
+[ -x "${CLEARCAM_TRAIN_VENV:-$HOME/.clearcam-train-venv}/bin/python" ] || { echo "Run script/setup_training.sh once first." >&2; exit 1; }
 EXTRA_ARGS=()
 if [ -n "${ROBOFLOW_VERSION:-}" ]; then
   EXTRA_ARGS+=(--roboflow-version "$ROBOFLOW_VERSION")
@@ -25,4 +25,4 @@ if [ -n "$EPOCHS" ]; then
   EXTRA_ARGS+=(--epochs "$EPOCHS")
 fi
 # Work inside the data directory so downloaded checkpoints never land in the repo.
-mkdir -p "$DATA/training" && cd "$DATA/training" && exec "$ROOT/.venv-train/bin/python" "$ROOT/script/train_from_corrections.py" --data "$DATA" --size "$SIZE" "${EXTRA_ARGS[@]}"
+mkdir -p "$DATA/training" && cd "$DATA/training" && exec "${CLEARCAM_TRAIN_VENV:-$HOME/.clearcam-train-venv}/bin/python" "$ROOT/script/train_from_corrections.py" --data "$DATA" --size "$SIZE" "${EXTRA_ARGS[@]}"

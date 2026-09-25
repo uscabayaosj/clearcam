@@ -3,7 +3,9 @@
 # Kept out of the app venv because torch is large and only training needs it.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VENV="$ROOT/.venv-train"
+# Outside ~/Documents: iCloud "Optimize Mac Storage" evicts files there, and
+# an evicted venv makes Python time out or stall mid-training.
+VENV="${CLEARCAM_TRAIN_VENV:-$HOME/.clearcam-train-venv}"
 PY="$("$ROOT/.venv/bin/python" -c 'import sys;print(sys.executable)' 2>/dev/null || command -v python3.11 || command -v python3)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
