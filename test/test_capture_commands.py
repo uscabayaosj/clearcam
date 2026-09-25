@@ -34,9 +34,9 @@ class CaptureCommandTests(unittest.TestCase):
         self.assertIn('program_date_time', recorder[recorder.index('-hls_flags') + 1])
         self.assertNotEqual(recorder[recorder.index('-hls_segment_filename') + 1], '/test/streams/stream_%06d.ts')
         self.assertNotIn('-vsync', decoder)
-        # FFmpeg drops to detection rate and scales before the pipe; Python no longer discards frames.
+        # Full camera frame rate reaches the live view; detection throttles itself in process_frame.
         self.assertNotIn('-fps_mode', decoder)
-        self.assertEqual(decoder[decoder.index('-vf') + 1], 'fps=10,scale=1920:1080')
+        self.assertEqual(decoder[decoder.index('-vf') + 1], 'scale=1920:1080')
         self.assertEqual(decoder[decoder.index('-pix_fmt') + 1], 'bgr24')
         self.assertNotIn('-reconnect', decoder)  # local HLS, not an HTTP input
 

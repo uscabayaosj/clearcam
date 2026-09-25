@@ -606,7 +606,7 @@ class VideoCapture:
           "-an",
           "-f", "rawvideo",
           "-pix_fmt", "bgr24",
-          "-vf", f"fps={DETECT_FPS:g},scale={self.width[cam_name]}:{self.height[cam_name]}",
+          "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",  # full camera rate: the live view shows every frame; detection throttles itself to DETECT_FPS
           "-threads", "1",
           "-"
       ]
@@ -650,7 +650,7 @@ class VideoCapture:
             "-an",
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
-            "-vf", f"fps={DETECT_FPS:g},scale={self.width[cam_name]}:{self.height[cam_name]}",
+            "-vf", f"scale={self.width[cam_name]}:{self.height[cam_name]}",  # full camera rate: the live view shows every frame; detection throttles itself to DETECT_FPS
             "-threads", "1",
             "-"
         ]
@@ -1434,7 +1434,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           self.end_headers()
           try:
             last_sent_frame_num = -1
-            min_interval = 1.0 / 15  # cap at 15 fps
+            min_interval = 1.0 / 30  # the camera's own rate (15-25 fps on Tapo), capped at 30
             wait_deadline = time.time() + 30
             while not cam.stopping.is_set():
               frame = cam.raw_frame.get(cam_name)
