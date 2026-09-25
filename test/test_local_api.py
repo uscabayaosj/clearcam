@@ -30,11 +30,14 @@ class LocalAPIRegressionTests(unittest.TestCase):
         from utils import household
         from utils import corrections
         namespace = dict(globals(), BASE_DIR=self.root,
-                         global_settings=SimpleNamespace(use_face=False, use_clip=False),
+                         # record_video=True: these fixtures are on-disk event_images,
+                         # i.e. classic recording-mode behaviour, not live-only mode.
+                         global_settings=SimpleNamespace(use_face=False, use_clip=False, record_video=True),
                          read_description=lambda _: None, is_vod=lambda _: False,
                          household=household, corrections=corrections, household_store=household.HouseholdStore(self.root),
                          add_to_queue=lambda fn, *args: fn(*args),
-                         enroll_household_face=lambda name, path: dict(error='No face was found in that image'))
+                         enroll_household_face=lambda name, path: dict(error='No face was found in that image'),
+                         live_journal=None)
         exec(compile(ast.Module(body=nodes, type_ignores=[]), '<handler>', 'exec'), namespace)
         self.server = HTTPServer(('127.0.0.1', 0), namespace['HLSRequestHandler'])
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

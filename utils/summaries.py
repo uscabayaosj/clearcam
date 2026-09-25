@@ -21,6 +21,21 @@ DEFAULT_TIME = '21:00'
 MAX_DESCRIPTIONS_IN_PROMPT = 20
 
 
+def collect_events(events, start_ts, end_ts):
+    """Facts from a flat list of {time, camera, people, description} dicts.
+
+    Shared by collect_window (reads event_images off disk) and live-only
+    mode (reads utils.live_journal.LiveJournal.all_since instead).
+    """
+    events = sorted((e for e in events if start_ts <= e['time'] < end_ts), key=lambda e: e['time'])
+    cameras = Counter(e['camera'] for e in events)
+    people = Counter(name for e in events for name in (e.get('people') or []))
+    unrecognized = sum(1 for e in events if not e.get('people'))
+    hours = sorted({datetime.fromtimestamp(e['time']).hour for e in events})
+    return dict(start=start_ts, end=end_ts, events=events, cameras=dict(cameras),
+                people=dict(people), unrecognized=unrecognized, active_hours=hours)
+
+
 def collect_window(cameras_root, start_ts, end_ts):
     """Facts about every event between start_ts and end_ts (wall clock)."""
     events = []
@@ -31,20 +46,13 @@ def collect_window(cameras_root, start_ts, end_ts):
         except Exception:
             captured = None
         if captured is None: captured = image.stat().st_mtime
-        if not (start_ts <= captured < end_ts): continue
         events.append(dict(
             time=captured,
             camera=image.parts[-4],
             people=read_people(image) or [],
             description=read_description(image),
         ))
-    events.sort(key=lambda e: e['time'])
-    cameras = Counter(e['camera'] for e in events)
-    people = Counter(name for e in events for name in e['people'])
-    unrecognized = sum(1 for e in events if e['people'] == [])
-    hours = sorted({datetime.fromtimestamp(e['time']).hour for e in events})
-    return dict(start=start_ts, end=end_ts, events=events, cameras=dict(cameras),
-                people=dict(people), unrecognized=unrecognized, active_hours=hours)
+    return collect_events(events, start_ts, end_ts)
 
 
 def _plural(count, noun):

@@ -54,8 +54,9 @@ from utils import household
 from utils import summaries
 from utils import corrections
 from utils import macos_notifications
-from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop
+from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop
 from utils.event_dedupe import RecentTriggers
+from utils.live_journal import LiveJournal
 import multiprocessing
 import re
 import base64
@@ -82,6 +83,8 @@ from ocsort_tracker import ocsort
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
 local_descriptions = LocalDescriptions()
+live_journal = LiveJournal()
+latest_live_summary = None  # live-only mode: most recent summary, in memory only
 DETECT_FPS = max(1.0, float(os.environ.get('CLEARCAM_DETECT_FPS', '10')))
 household_store = household.HouseholdStore(BASE_DIR)
 notifications_muted_until = 0.0  # wall clock; 0 means notifications are on
@@ -155,21 +158,34 @@ def run_summary_if_due():
   window_start = max(config.get('last_run', 0), now - 24 * 3600) or now - 24 * 3600
   config['last_run'] = now
   database.run_put('summary', 'config', config)
+  live_only = not getattr(global_settings, 'record_video', False)
 
   def build():
+    global latest_live_summary
     try:
-      facts = summaries.collect_window(BASE_DIR / 'cameras', window_start, now)
+      if live_only:
+        events = [dict(time=e['captured_at'], camera=e['cam_name'], people=e.get('people') or [],
+                       description=e.get('description')) for e in live_journal.all_since(window_start)]
+        facts = summaries.collect_events(events, window_start, now)
+      else:
+        facts = summaries.collect_window(BASE_DIR / 'cameras', window_start, now)
       fallback = summaries.deterministic_summary(facts)
 
       def finish(model_text):
+        global latest_live_summary
         if model_text: model_text = summaries.trim_to_complete_sentences(model_text)
         if model_text and not summaries.acceptable_summary(model_text):
           print('Summary model output rejected (degenerate); using template.')
           model_text = None
         text = model_text or fallback
-        summaries.write_summary(BASE_DIR, dict(
-            start=window_start, end=now, summary=text, generated=bool(model_text),
-            events=len(facts['events']), model=f'Qwen3-VL' if model_text else 'template'))
+        payload = dict(start=window_start, end=now, summary=text, generated=bool(model_text),
+                       events=len(facts['events']), model=f'Qwen3-VL' if model_text else 'template')
+        if live_only:
+          # Live-only mode never writes a summary file; only the most recent
+          # one is kept, in memory.
+          latest_live_summary = payload
+        else:
+          summaries.write_summary(BASE_DIR, payload)
         if not notifications_muted():
           macos_notifications.send('ClearCam summary', text[:180])
 
@@ -430,6 +446,14 @@ class VideoCapture:
     # per camera: (timestamp, Nx7 array) of every confirmed track, unfiltered
     # by alert zones/speed, for the live-view overlay only.
     self.live_boxes = {}
+    # Whether to run the HLS recorder at all. Defaults True so any code path
+    # that builds a VideoCapture without wiring this up (tests, mainly)
+    # behaves exactly as before this setting existed; main() sets this from
+    # global_settings.record_video before cam.start() is ever called.
+    self.record_video = True
+    # Per-camera scene captions/counts for live mode (populated by the main
+    # loop's caption scheduler); harmless to keep updated when recording too.
+    self.scene = {}
 
     #self.last_shapes_time = time.time()
     #self.det_shapes = []
@@ -466,7 +490,9 @@ class VideoCapture:
     self.tracker[cam_name] = ocsort.OCSort(max_age=100)
     self.count[cam_name] = 0
     self.prev_time[cam_name] = time.time()
-    self.current_stream_dir_raw[cam_name] = self._get_new_stream_dir(cam_name)
+    # A live-only camera (record_video=False, hls_proc is None) has no
+    # recorder writing into streams/<date>, so there is nothing to create.
+    self.current_stream_dir_raw[cam_name] = self._get_new_stream_dir(cam_name) if self.hls_proc.get(cam_name) is not None else None
     self.filename[cam_name] = None
     self.live_link_lock[cam_name] = threading.Lock()
     alerts_on[cam_name] = True
@@ -485,7 +511,8 @@ class VideoCapture:
       if time.time() - cam_check >= 5:
         cam_check = time.time()
         run_summary_if_due()
-        local_descriptions.backfill_if_idle(BASE_DIR / 'cameras')
+        if self.record_video: local_descriptions.backfill_if_idle(BASE_DIR / 'cameras')
+        self.maybe_caption_scene()
         new_cams = camera_sources()
         for cam_name in new_cams.keys():
           if type(new_cams[cam_name]) != str: continue # todo find cause
@@ -539,16 +566,16 @@ class VideoCapture:
       return result
 
   def _open_ffmpeg_locked(self, cam_name):
-    path = self._get_new_stream_dir(cam_name)
     if cam_name in self.proc: self._safe_kill_process(self.proc[cam_name])
     if cam_name in self.hls_proc: self._safe_kill_process(self.hls_proc[cam_name])
     src = self.src[cam_name]
     if type(src) != str: return # todo, fixes a crash, fix cause
 
     ffmpeg_path = find_ffmpeg()
-    
+
     is_rtsp = src.startswith("rtsp")
     if self.vod[cam_name]:
+      path = self._get_new_stream_dir(cam_name)
       command = [
         ffmpeg_path,
         "-i", src,
@@ -564,8 +591,29 @@ class VideoCapture:
         str(path / "stream.m3u8"),
       ]
       return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), None
-        
+
+    # Live-only mode (record_video=False): a live RTSP camera gets only the
+    # detection decoder, never the HLS recorder. No streams/<date> directory
+    # is created for it either, since there is nothing to write there.
+    if is_rtsp and not getattr(self, 'record_video', True):
+      self.hls_proc[cam_name] = None
+      if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
+      command = [
+          ffmpeg_path,
+          "-loglevel", "error",
+          "-rtsp_transport", "tcp",
+          "-i", src,
+          "-an",
+          "-f", "rawvideo",
+          "-pix_fmt", "bgr24",
+          "-vf", f"fps={DETECT_FPS:g},scale={self.width[cam_name]}:{self.height[cam_name]}",
+          "-threads", "1",
+          "-"
+      ]
+      return None, subprocess.Popen(command, stdout=subprocess.PIPE)
+
     else:  # Live streams
+      path = self._get_new_stream_dir(cam_name)
       # Original live stream pipeline
       command = [
           ffmpeg_path,
@@ -629,6 +677,9 @@ class VideoCapture:
     # Crops exist to feed the search index. With no search enabled they are
     # write-only disk churn (~1 GB/day per camera), so skip them entirely.
     if not (global_settings.use_clip or global_settings.use_face): return
+    # Live-only mode saves nothing to disk beyond the transient temp file
+    # used for a description request.
+    if not self.record_video: return
     p = np.array([p.tlwh[0],p.tlwh[1],(p.tlwh[0]+p.tlwh[2]),(p.tlwh[1]+p.tlwh[3]),p.score,p.class_id,p.track_id])
     timestamp = "video" if self.vod[cam_name] else datetime.now().strftime("%Y-%m-%d")
     filepath = BASE_DIR / "cameras" / f"{cam_name}/objects/{timestamp}"
@@ -682,8 +733,17 @@ class VideoCapture:
 
     while not self.stopping.is_set() and (BASE_DIR / "cameras" / cam_name).exists():
       try:
-        if self.hls_proc[cam_name].poll() is not None:
+        recorder = self.hls_proc.get(cam_name)
+        if recorder is not None and recorder.poll() is not None:
           self.pipeline[cam_name].update(state="recorder_offline", last_frame=None)
+          self.hls_proc[cam_name], self.proc[cam_name] = restart_stream()
+          continue
+        decoder = self.proc.get(cam_name)
+        if decoder is not None and decoder.poll() is not None:
+          # No recorder to catch this in live-only mode (hls_proc is None
+          # there): frame_loop must notice the decoder's own death and
+          # restart the stream itself.
+          self.pipeline[cam_name].update(state="no_frames", last_frame=None)
           self.hls_proc[cam_name], self.proc[cam_name] = restart_stream()
           continue
         raw_bytes = self.proc[cam_name].stdout.read(frame_size)
@@ -748,28 +808,28 @@ class VideoCapture:
             self._safe_kill_process(decoder)
           return
 
-        # don't run inference when no active scheds
-        if not any(counter.is_active() for _, counter in self.alert_counters[cam_name].items()): self.last_preds[cam_name] = [] # to remove annotation when no alerts active
-        else:
-          if not global_settings.userID or alerts_on.get(cam_name, True):
-            preds, frame = self.run_inference(frame, cam_name=cam_name)
-            self.last_frames[cam_name].append(frame.numpy().copy() if hasattr(frame, 'numpy') else np.array(frame, copy=True))
-            self.last_preds[cam_name] = preds.copy()
-            self.pipeline[cam_name].update(last_inference=time.time(), state="detecting", error=None)
-            self.last_frame_num[cam_name] = self.frame_num[cam_name]
+        # Detection runs at DETECT_FPS regardless of whether an alert rule is
+        # active: live counts and scene captions (/live_scene) need it too.
+        # Alert *firing* logic below stays gated on each rule's is_active().
+        if not global_settings.userID or alerts_on.get(cam_name, True):
+          preds, frame = self.run_inference(frame, cam_name=cam_name)
+          self.last_frames[cam_name].append(frame.numpy().copy() if hasattr(frame, 'numpy') else np.array(frame, copy=True))
+          self.last_preds[cam_name] = preds.copy()
+          self.pipeline[cam_name].update(last_inference=time.time(), state="detecting", error=None)
+          self.last_frame_num[cam_name] = self.frame_num[cam_name]
 
-            curr_time = time.time()
-            fps = 1 / (curr_time - self.prev_time[cam_name])
-            self.prev_time[cam_name] = curr_time
-            print(f"\rFPS: {fps:.2f}", end="", flush=True)
-          else:
-            self.last_frame_num[cam_name] = self.frame_num[cam_name]
-            self.last_preds[cam_name] = []
+          curr_time = time.time()
+          fps = 1 / (curr_time - self.prev_time[cam_name])
+          self.prev_time[cam_name] = curr_time
+          print(f"\rFPS: {fps:.2f}", end="", flush=True)
+        else:
+          self.last_frame_num[cam_name] = self.frame_num[cam_name]
+          self.last_preds[cam_name] = []
 
         filtered_preds = self.last_preds[cam_name]
 
         if self.count[cam_name] > 10:
-          if self.last_preview_time[cam_name] is None or time.time() - self.last_preview_time[cam_name] >= 3600: # preview every hour
+          if self.record_video and (self.last_preview_time[cam_name] is None or time.time() - self.last_preview_time[cam_name] >= 3600): # preview every hour
             self.last_preview_time[cam_name] = time.time()
             self.filename[cam_name] = BASE_DIR / "cameras" / f"{cam_name}/preview.png"
             write_png(self.filename[cam_name], self.raw_frame[cam_name])
@@ -794,45 +854,109 @@ class VideoCapture:
                       self.pipeline[cam_name]["suppressed_events"] = self.pipeline[cam_name].get("suppressed_events", 0) + 1
                       continue
                     recent.remember(trigger, label_of(trigger))
-                  timestamp = "video" if self.vod[cam_name] else datetime.now().strftime("%Y-%m-%d")
-                  filepath = BASE_DIR / "cameras" / f"{cam_name}/event_images/{timestamp}"
-                  filepath.mkdir(parents=True, exist_ok=True)
                   annotated_frame = draw_predictions(self.last_frames[cam_name][-1].copy(), filtered_preds, color_dict)
                   # todo alerts can be sent with the wrong thumbnail if two happen quickly, use map
                   ts = int(self.cap[cam_name].get(cv2.CAP_PROP_POS_FRAMES) / self.src_fps[cam_name]) - 5 if self.vod[cam_name] else int(time.time() - self.start_time[cam_name] - 5)
                   event_id = time.time_ns()
-                  self.filename[cam_name] = filepath / f"{event_id}_notif.jpg" if alert.is_notif else filepath / f"{event_id}.jpg"
-                  if not self.vod[cam_name]: cv2.imwrite(str(self.filename[cam_name]), annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]) # we've 10MB limit for video file, raw png is 3MB!
-                  if not self.vod[cam_name]: write_event_time(self.filename[cam_name], time.time())
-                  if not self.vod[cam_name]:
-                    try:
-                      fh, fw = self.last_frames[cam_name][-1].shape[:2]
-                      top = next((i for i, p in enumerate(filtered_preds) if trigger is not None and np.array_equal(p, trigger)), None)
-                      corrections.write_detections(self.filename[cam_name], filtered_preds, class_labels, fw, fh, top)
-                    except Exception as error:
-                      print('detections sidecar failed:', error)
                   recognized = None
-                  if not self.vod[cam_name]:
-                    # Match against enrolled household faces on the un-annotated frame.
-                    recognized = recognize_household(self.filename[cam_name], self.last_frames[cam_name][-1])
-                  if global_settings.userID is not None and not self.vod[cam_name] and alert.is_notif:
-                    title = f"Event Detected ({cam_name})"
-                    threading.Thread(target=send_notif, args=(global_settings.userID,title,None), daemon=True).start()
-                    if global_settings.key:
-                      threading.Thread(target=export_and_upload, kwargs={"cam_name": cam_name, "thumbnail": self.filename[cam_name], "userID": global_settings.userID, "key": global_settings.key, "start": ts, "wait":True}, daemon=True).start()
-                  elif not self.vod[cam_name] and alert.is_notif and not notifications_muted():
-                    title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
-                    threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
-                  if not self.vod[cam_name] and global_settings.use_qwen:
-                    # Lead the description with the detection that fired the event.
-                    prompt, crop_path = None, None
+                  live_only_event = (not self.vod[cam_name]) and (not self.record_video)
+
+                  if live_only_event:
+                    # Live-only mode (record_video=False): the event lives only
+                    # in utils.live_journal — nothing under event_images/ is
+                    # ever written for it.
+                    raw_frame = self.last_frames[cam_name][-1]
+                    fh, fw = raw_frame.shape[:2]
+                    top = next((i for i, p in enumerate(filtered_preds) if trigger is not None and np.array_equal(p, trigger)), None)
+                    detections = []
+                    for index, pred in enumerate(filtered_preds):
+                      x1, y1, x2, y2, score, cls = [float(v) for v in pred[:6]]
+                      label = class_labels[int(cls)] if int(cls) < len(class_labels) else str(int(cls))
+                      detections.append(dict(box=[x1, y1, x2, y2], score=score, cls=int(cls), label=label, trigger=(index == top)))
+                    trigger_dict = detections[top] if top is not None else None
+
+                    ok, encoded = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    image_jpeg = encoded.tobytes() if ok else b''
+                    trigger_jpeg = None
                     if trigger is not None:
-                      height, width = self.last_frames[cam_name][-1].shape[:2]
-                      label = class_labels[int(trigger[5])] if int(trigger[5]) < len(class_labels) else None
-                      prompt = trigger_prompt(label, trigger[:4], width, height)
-                      crop_path = write_trigger_crop(self.last_frames[cam_name][-1], trigger[:4], self.filename[cam_name])
-                    local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif,
-                                              prompt=prompt, image_override=crop_path)
+                      crop = trigger_crop(raw_frame, trigger[:4])
+                      if crop is not None:
+                        okc, cropped = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                        trigger_jpeg = cropped.tobytes() if okc else None
+
+                    # Household recognition against the un-annotated frame,
+                    # without leaving any file behind.
+                    people = []
+                    if household_store.has_members():
+                      try:
+                        embedding = face_embedding(raw_frame)
+                        match = household_store.match(embedding) if embedding else None
+                        if match:
+                          people = [match['name']]
+                          recognized = match
+                      except Exception as error:
+                        print('Household recognition failed:', error)
+
+                    description_state = 'pending' if global_settings.use_qwen else 'off'
+                    live_journal.add(dict(
+                        id=str(event_id), cam_name=cam_name, captured_at=time.time(), is_notif=bool(alert.is_notif),
+                        image_jpeg=image_jpeg, trigger_jpeg=trigger_jpeg, detections=detections,
+                        trigger=trigger_dict, people=people, description=None, correction=None,
+                        description_state=description_state, width=fw, height=fh))
+                    self.filename[cam_name] = None
+
+                    if global_settings.userID is not None and alert.is_notif:
+                      title = f"Event Detected ({cam_name})"
+                      threading.Thread(target=send_notif, args=(global_settings.userID, title, None), daemon=True).start()
+                    elif alert.is_notif and not notifications_muted():
+                      title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
+                      threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
+
+                    if global_settings.use_qwen:
+                      prompt = None
+                      if trigger is not None:
+                        label = class_labels[int(trigger[5])] if int(trigger[5]) < len(class_labels) else None
+                        prompt = trigger_prompt(label, trigger[:4], fw, fh)
+
+                      def on_description(text, live_event_id=str(event_id)):
+                        live_journal.update(live_event_id, description=text, description_state=('done' if text else 'failed'))
+
+                      local_descriptions.submit_memory(trigger_jpeg or image_jpeg, cam_name, alert.is_notif, prompt, on_description)
+                  else:
+                    timestamp = "video" if self.vod[cam_name] else datetime.now().strftime("%Y-%m-%d")
+                    filepath = BASE_DIR / "cameras" / f"{cam_name}/event_images/{timestamp}"
+                    filepath.mkdir(parents=True, exist_ok=True)
+                    self.filename[cam_name] = filepath / f"{event_id}_notif.jpg" if alert.is_notif else filepath / f"{event_id}.jpg"
+                    if not self.vod[cam_name]: cv2.imwrite(str(self.filename[cam_name]), annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]) # we've 10MB limit for video file, raw png is 3MB!
+                    if not self.vod[cam_name]: write_event_time(self.filename[cam_name], time.time())
+                    if not self.vod[cam_name]:
+                      try:
+                        fh, fw = self.last_frames[cam_name][-1].shape[:2]
+                        top = next((i for i, p in enumerate(filtered_preds) if trigger is not None and np.array_equal(p, trigger)), None)
+                        corrections.write_detections(self.filename[cam_name], filtered_preds, class_labels, fw, fh, top)
+                      except Exception as error:
+                        print('detections sidecar failed:', error)
+                    if not self.vod[cam_name]:
+                      # Match against enrolled household faces on the un-annotated frame.
+                      recognized = recognize_household(self.filename[cam_name], self.last_frames[cam_name][-1])
+                    if global_settings.userID is not None and not self.vod[cam_name] and alert.is_notif:
+                      title = f"Event Detected ({cam_name})"
+                      threading.Thread(target=send_notif, args=(global_settings.userID,title,None), daemon=True).start()
+                      if global_settings.key:
+                        threading.Thread(target=export_and_upload, kwargs={"cam_name": cam_name, "thumbnail": self.filename[cam_name], "userID": global_settings.userID, "key": global_settings.key, "start": ts, "wait":True}, daemon=True).start()
+                    elif not self.vod[cam_name] and alert.is_notif and not notifications_muted():
+                      title = f"{recognized['name']} — {cam_name}" if recognized else f"Event detected — {cam_name}"
+                      threading.Thread(target=macos_notifications.send, args=(title,), daemon=True).start()
+                    if not self.vod[cam_name] and global_settings.use_qwen:
+                      # Lead the description with the detection that fired the event.
+                      prompt, crop_path = None, None
+                      if trigger is not None:
+                        height, width = self.last_frames[cam_name][-1].shape[:2]
+                        label = class_labels[int(trigger[5])] if int(trigger[5]) < len(class_labels) else None
+                        prompt = trigger_prompt(label, trigger[:4], width, height)
+                        crop_path = write_trigger_crop(self.last_frames[cam_name][-1], trigger[:4], self.filename[cam_name])
+                      local_descriptions.submit(self.filename[cam_name], cam_name, notify=alert.is_notif,
+                                                prompt=prompt, image_override=crop_path)
                   self.last_det[cam_name] = time.time()
                   self.pipeline[cam_name]["last_event"] = time.time()
                   alert.last_det = time.time()
@@ -968,10 +1092,52 @@ class VideoCapture:
     preds = np.array(preds)
     return preds, frame
 
+  def maybe_caption_scene(self):
+    """Ask the description model for a one-line scene caption per camera.
+
+    Runs off the main loop every ~5s (see start()). Alert descriptions keep
+    priority: this never enqueues while local_descriptions' queue is
+    non-empty, and at most one caption job is ever in flight at a time
+    across all cameras. Captions live only in self.scene — never on disk.
+    """
+    if not global_settings.use_qwen or not local_descriptions.enabled: return
+    if not local_descriptions.jobs.empty(): return
+    if getattr(self, 'caption_in_flight', False): return
+    now = time.time()
+    for cam_name in list(self.raw_frame.keys()):
+      frame = self.raw_frame.get(cam_name)
+      if frame is None: continue
+      counts = live_counts_for_cam(self, cam_name, now)
+      scene = self.scene.setdefault(cam_name, dict(prev_counts={}, caption=None, caption_at=None, caption_state='idle'))
+      if not caption_due(scene['prev_counts'], counts, scene['caption_at'], now): continue
+      ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+      if not ok: continue
+      prompt = (f"This home camera currently shows {counts_phrase(counts)}. In one short sentence, "
+                "describe what is happening in the scene. Mention only what is visible; do not infer "
+                "identity or intent.")
+      scene['prev_counts'] = counts
+      scene['caption_state'] = 'pending'
+      self.caption_in_flight = True
+
+      def on_caption(text, cam_name=cam_name):
+        entry = self.scene.get(cam_name)
+        if entry is not None:
+          if text:
+            entry['caption'], entry['caption_at'], entry['caption_state'] = text, time.time(), 'done'
+          else:
+            entry['caption_state'] = 'failed'
+        self.caption_in_flight = False
+
+      submitted = local_descriptions.submit_memory(encoded.tobytes(), cam_name, False, prompt, on_caption)
+      if not submitted:
+        scene['caption_state'] = 'failed'
+        self.caption_in_flight = False
+      break  # one job in flight across all cameras, per check
+
   def release(self, cam_name):
       self.running[cam_name] = False
-      if cam_name in self.proc: self.proc[cam_name].kill()
-      if cam_name in self.hls_proc: self.hls_proc[cam_name].kill()    
+      if cam_name in self.proc and self.proc[cam_name] is not None: self.proc[cam_name].kill()
+      if cam_name in self.hls_proc and self.hls_proc[cam_name] is not None: self.hls_proc[cam_name].kill()
 
 def is_bright_color(color):
   r, g, b = color
@@ -1024,6 +1190,53 @@ def draw_live_boxes(frame, boxes):
     cv2.rectangle(frame, (chip_x1, chip_y1), (chip_x2, chip_y2), color, -1, cv2.LINE_AA)
     cv2.putText(frame, label, (chip_x1 + pad_x, chip_y2 - pad_y - baseline // 2), font, scale, font_color, 1, cv2.LINE_AA)
   return frame
+
+def counts_phrase(counts):
+  """{'car': 2, 'person': 1} -> '2 cars and 1 person'; {} -> 'no detected objects'."""
+  if not counts: return 'no detected objects'
+  def noun(label, n):
+    if n == 1: return label
+    if label.endswith(('s', 'x', 'sh', 'ch')): return label + 'es'
+    return label + 's'
+  parts = [f"{n} {noun(label, n)}" for label, n in counts.items()]
+  if len(parts) == 1: return parts[0]
+  return ', '.join(parts[:-1]) + ' and ' + parts[-1]
+
+
+def caption_due(prev_counts, counts, last_at, now):
+  """Whether a new scene caption should be requested right now.
+
+  Due when the scene changed and the last caption is at least 30s old, or
+  unconditionally once the last caption is at least 120s old (so a static
+  scene still gets refreshed occasionally). Always due if there is no prior
+  caption.
+  """
+  if last_at is None: return True
+  age = now - last_at
+  if age >= 120: return True
+  if age >= 30 and counts != prev_counts: return True
+  return False
+
+
+def live_counts_for_cam(cam_obj, cam_name, now=None):
+  """Per-class object counts from the live tracker boxes, at or above the
+  camera's alert threshold. Empty (not stale-tolerant) once live_boxes is
+  older than 1.5s, mirroring the /live_view overlay's own freshness check."""
+  now = time.time() if now is None else now
+  live = cam_obj.live_boxes.get(cam_name)
+  if live is None or now - live[0] >= 1.5: return {}
+  _, boxes = live
+  settings = cam_obj.settings.get(cam_name) if hasattr(cam_obj, 'settings') else None
+  threshold = (settings.get('threshold') if settings else None) or 0.5
+  counts = {}
+  for row in boxes:
+    conf = float(row[4])
+    if conf < threshold: continue
+    cls_i = int(row[5])
+    label = class_labels[cls_i] if 0 <= cls_i < len(class_labels) else str(cls_i)
+    counts[label] = counts.get(label, 0) + 1
+  return counts
+
 
 def point_not_in_polygon(coords, poly):
     n = len(poly)
@@ -1167,6 +1380,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         if parsed_path.path == "/get_global_settings":
           self.send_200(secret_settings(global_settings).__dict__)
           return
+        if parsed_path.path == "/live_mode":
+          self.send_200({"record_video": bool(getattr(global_settings, 'record_video', False))})
+          return
         if parsed_path.path == "/local_ai_status":
           self.send_200(local_descriptions.status())
           return
@@ -1193,8 +1409,13 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             live = cam.live_boxes.get(name)
             state["live_boxes"] = int(live[1].shape[0]) if live is not None and now - live[0] < 1.5 else 0
             state["decoder_running"] = bool(cam.proc.get(name) and cam.proc[name].poll() is None)
-            state["recorder_running"] = bool(cam.hls_proc.get(name) and cam.hls_proc[name].poll() is None)
-            if not state["recorder_running"]: state["state"] = "recorder_offline"
+            recorder = cam.hls_proc.get(name)
+            # hls_proc is None only for a live-only camera (record_video=False):
+            # there is no recorder to report on, and its absence must never be
+            # read as a fault.
+            not_recording = name in cam.hls_proc and recorder is None
+            state["recorder_running"] = None if not_recording else bool(recorder and recorder.poll() is None)
+            if not not_recording and not state["recorder_running"]: state["state"] = "recorder_offline"
             elif not state["last_frame"] or now - state["last_frame"] > 20: state["state"] = "no_frames"
             elif not state["active_rules"]: state["state"] = "no_active_rules"
             elif not state["last_inference"] or now - state["last_inference"] > 30: state["state"] = "inference_pending"
@@ -1206,6 +1427,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           if not cam_name or cam_name not in cam.raw_frame:
             self.send_refusal("Unknown camera", code=404)
             return
+          draw_boxes = (query.get("boxes", ["1"])[0] or "1") != "0"
           self.send_response(200)
           self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=clearcamframe")
           self.send_header("Cache-Control", "no-store")
@@ -1228,9 +1450,10 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               loop_start = time.time()
 
               out = frame.copy()
-              live = cam.live_boxes.get(cam_name)
-              if live is not None and loop_start - live[0] < 1.5:
-                out = draw_live_boxes(out, live[1])
+              if draw_boxes:
+                live = cam.live_boxes.get(cam_name)
+                if live is not None and loop_start - live[0] < 1.5:
+                  out = draw_live_boxes(out, live[1])
 
               ok, jpg = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 72])
               if not ok: continue
@@ -1248,6 +1471,43 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             pass
           return
 
+        if parsed_path.path == "/live_event_image":
+          event_id = query.get("id", [None])[0]
+          kind = query.get("kind", [None])[0]
+          event = live_journal.get(event_id) if event_id else None
+          if event is None:
+            self.send_refusal("Event not found", code=404)
+            return
+          payload = event.get('trigger_jpeg') if kind == 'trigger' else event.get('image_jpeg')
+          if not payload:
+            self.send_refusal("Image not available", code=404)
+            return
+          self.send_response(200)
+          self.send_header("Content-Type", "image/jpeg")
+          self.send_header("Cache-Control", "no-store")
+          self.send_header("Content-Length", str(len(payload)))
+          self.end_headers()
+          self.wfile.write(payload)
+          return
+
+        if parsed_path.path == "/live_scene":
+          now = time.time()
+          cameras = {}
+          for name in cam.raw_frame.keys():
+            counts = live_counts_for_cam(cam, name, now)
+            live = cam.live_boxes.get(name)
+            scene = cam.scene.get(name, {})
+            cameras[name] = {
+              "counts": counts,
+              "total": sum(counts.values()),
+              "updated_at": live[0] if live is not None else None,
+              "caption": scene.get('caption'),
+              "caption_at": scene.get('caption_at'),
+              "caption_state": scene.get('caption_state', 'idle'),
+            }
+          self.send_200({"cameras": cameras})
+          return
+
         if parsed_path.path == "/vendor/hls.min.js":
           asset = Path(__file__).parent / "vendor" / "hls.min.js"
           if not asset.is_file():
@@ -1260,7 +1520,12 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           self.wfile.write(asset.read_bytes())
           return
 
-        if parsed_path.path == "/list_days":          
+        if parsed_path.path == "/list_days":
+          if not getattr(global_settings, 'record_video', False):
+            # Nothing new is written to streams/<date> in live-only mode; keep
+            # the UI's date plumbing working by reporting just today.
+            self.send_200([datetime.now().strftime("%Y-%m-%d")])
+            return
           base_path = BASE_DIR / "cameras"
           days = set()
           date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -1422,6 +1687,35 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             if not image or verdict not in corrections.VERDICTS:
                 self.send_refusal('A verdict of confirm, wrong_label, or not_object is required')
                 return
+            if image.startswith('/live_event_image'):
+                # The owner explicitly asked to correct this one in-memory
+                # event; it goes straight into Data/corrections like any
+                # other, without an on-disk event to copy or a sidecar.
+                try:
+                    sub_query = parse_qs(urlparse(image).query)
+                    event = live_journal.get(sub_query.get('id', [None])[0])
+                    if event is None: raise ValueError('Event not found')
+                    kind = sub_query.get('kind', [None])[0]
+                    image_bytes = event.get('trigger_jpeg') if kind == 'trigger' else event.get('image_jpeg')
+                    if not image_bytes: raise ValueError('Image not available')
+                    if label and label not in class_labels: raise ValueError('Unknown object type')
+                    name = f"{event['id']}_notif.jpg" if event.get('is_notif') else f"{event['id']}.jpg"
+                    entry = corrections.record_correction_bytes(
+                        BASE_DIR, image_bytes, name, event.get('detections'),
+                        event.get('width'), event.get('height'), verdict, label,
+                        event.get('cam_name'), crop_bytes=event.get('trigger_jpeg'))
+                except ValueError as error:
+                    self.send_refusal(str(error) or 'Invalid correction')
+                    return
+                live_journal.update(event['id'], correction=dict(verdict=entry['verdict'], label=entry['label'], time=entry['time']))
+                try:
+                    if roboflow_sync.load_config(BASE_DIR).get('enabled'):
+                        roboflow_sync.sync_in_background(BASE_DIR, class_labels)
+                except Exception as error:
+                    print('Roboflow sync-on-correction failed to start:', error)
+                self.send_200(dict(verdict=entry['verdict'], label=entry['label'],
+                                   total=len(corrections.load_corrections(BASE_DIR))))
+                return
             try:
                 image_path = contained_path(BASE_DIR / 'cameras', image.removeprefix('/cameras/').lstrip('/'))
                 if image_path.suffix.lower() not in ('.jpg', '.jpeg'): raise ValueError('Not an event image')
@@ -1500,6 +1794,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self.send_error(400, 'count must be 1-30')
                 return
+            if not getattr(global_settings, 'record_video', False):
+                self.send_200([latest_live_summary] if latest_live_summary else [])
+                return
             self.send_200(summaries.recent_summaries(BASE_DIR, count))
             return
 
@@ -1536,6 +1833,30 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             image = query.get('image', [None])[0]
             if not name or not image:
                 self.send_error(400, 'Missing name or image')
+                return
+            if image.startswith('/live_event_image'):
+                try:
+                    clean = household.clean_name(name)
+                    sub_query = parse_qs(urlparse(image).query)
+                    event = live_journal.get(sub_query.get('id', [None])[0])
+                    kind = sub_query.get('kind', [None])[0]
+                    payload = (event.get('trigger_jpeg') if kind == 'trigger' else event.get('image_jpeg')) if event else None
+                    if not payload: raise ValueError('Live event image not found')
+                except ValueError as error:
+                    self.send_error(400, str(error) or 'Invalid enrollment request')
+                    return
+                from utils.local_descriptions import live_temp_dir
+                temp_path = live_temp_dir() / f'{uuid.uuid4().hex}.jpg'
+                temp_path.write_bytes(payload)
+                try:
+                    result = add_to_queue(enroll_household_face, clean, temp_path)
+                finally:
+                    try: temp_path.unlink()
+                    except OSError: pass
+                if result.get('error'):
+                    self.send_error(422, result['error'])
+                    return
+                self.send_200({'status': 'ok', 'id': result['id']})
                 return
             try:
                 image_path = contained_path(BASE_DIR / 'cameras', image.removeprefix('/cameras/').lstrip('/'))
@@ -1666,6 +1987,27 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_error(403, "Outside camera storage")
             return
 
+        if file_path.name == 'preview.png' and not getattr(cam, 'record_video', True):
+            # Live-only mode never writes preview.png; encode the latest
+            # un-annotated frame on the fly so the same URL keeps working
+            # (the zone editor loads this).
+            frame = cam.raw_frame.get(cam_name)
+            if frame is None:
+                self.send_error(404, "No frame yet")
+                return
+            ok, png = cv2.imencode('.png', frame)
+            if not ok:
+                self.send_error(500, "Could not encode preview")
+                return
+            body = png.tobytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if file_path.name == 'live.m3u8':
             # A wide window keeps a briefly-stalled player inside the playlist
             # instead of chasing segments that already rolled out.
@@ -1754,6 +2096,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           # keep userid and key if "True"
           if data["userID"] == True: data["userID"] = global_settings.userID
           if data["key"] == True: data["key"] = global_settings.key
+          # An older UI build that doesn't yet send record_video must not
+          # silently flip an existing recording setup to live-only.
+          if 'record_video' not in data: data['record_video'] = getattr(global_settings, 'record_video', False)
           add_to_queue(db.run_put, database, "global_settings", "all", GlobalSettings(**data))
           add_to_queue(set_settings, GlobalSettings(**data))
           self.send_200([])
@@ -1819,6 +2164,38 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             if uploaded_image:
               if ',' in uploaded_image: uploaded_image = uploaded_image.split(',')[1]
               uploaded_image = base64.b64decode(uploaded_image)
+
+            if not getattr(global_settings, 'record_video', False):
+              # Live-only mode: folder/date are meaningless (nothing is on
+              # disk), and there is no embedding index to search.
+              if image_text or similar_img or uploaded_image:
+                self.send_200({"images": []})
+                return
+              today = datetime.now().strftime("%Y-%m-%d")
+              events = live_journal.list(start, count, cam=cam_name, alerts_only=(name_contains == '_notif'))
+              image_data = []
+              for event in events:
+                event_id = event['id']
+                suffix = '_notif' if event.get('is_notif') else ''
+                image_data.append({
+                  "url": f"/live_event_image?id={event_id}",
+                  "filename": f"{event_id}{suffix}.jpg",
+                  "cam_name": event.get('cam_name'),
+                  "folder": today,
+                  "timestamp": 0,
+                  "captured_at": event.get('captured_at'),
+                  "time_source": "live",
+                  "playback_offset": None,
+                  "description": event.get('description'),
+                  "description_state": event.get('description_state'),
+                  "people": event.get('people') or [],
+                  "trigger": event.get('trigger'),
+                  "correction": event.get('correction'),
+                  "live": True,
+                  **({"trigger_url": f"/live_event_image?id={event_id}&kind=trigger"} if event.get('trigger_jpeg') else {}),
+                })
+              self.send_200({"images": image_data, "count": len(image_data)})
+              return
 
             if cam_name:
               camera_dirs = [BASE_DIR / "cameras" / cam_name]
@@ -1923,7 +2300,10 @@ def schedule_daily_restart(cam, restart_time):
         for cam_name in cams.keys():
           cam.start_time[cam_name] = None
           cam.hls_proc[cam_name], cam.proc[cam_name] = cam._open_ffmpeg(cam_name)
-          cam.current_stream_dir_raw[cam_name] = cam._get_new_stream_dir(cam_name)
+          # A live-only camera (record_video=False) has no recorder, so there
+          # is nothing to point a new streams/<date> directory at.
+          if cam.hls_proc.get(cam_name) is not None:
+            cam.current_stream_dir_raw[cam_name] = cam._get_new_stream_dir(cam_name)
 
 
 
@@ -2014,7 +2394,18 @@ def set_settings(x): # todo, save to db, do logic in GlobalSettings class, sanit
     x.userID = None
 
   local_descriptions.configure(x.use_qwen, x.qwen_size)
+  record_video_changed = getattr(x, 'record_video', False) != getattr(global_settings, 'record_video', False)
   global_settings = x
+  if cam is not None:
+    cam.record_video = getattr(x, 'record_video', False)
+    if record_video_changed:
+      # Recording turned on/off: every live RTSP camera needs its recorder
+      # started or stopped, so re-open each stream under the new mode.
+      for cam_name in list(cam.src.keys()):
+        cam.start_time[cam_name] = None
+        cam.hls_proc[cam_name], cam.proc[cam_name] = cam._open_ffmpeg(cam_name)
+        if cam.hls_proc.get(cam_name) is not None:
+          cam.current_stream_dir_raw[cam_name] = cam._get_new_stream_dir(cam_name)
 
 def clip_latest_img(img):
   if global_settings.use_clip:
@@ -2121,7 +2512,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         super().server_close()
 
 class GlobalSettings:
-  def __init__(self, use_clip=False, use_face=False ,model_size="t", model_res=960, userID=None, key=None, use_qwen=False, qwen_size=2):
+  def __init__(self, use_clip=False, use_face=False ,model_size="t", model_res=960, userID=None, key=None, use_qwen=False, qwen_size=2, record_video=False):
     self.use_clip = use_clip
     self.use_face = use_face
     self.model_size = model_size
@@ -2130,6 +2521,10 @@ class GlobalSettings:
     self.key= key
     self.use_qwen = use_qwen
     self.qwen_size = qwen_size
+    # A pickled/stored settings object saved before this field existed reads
+    # as False here too (see getattr(..., 'record_video', False) elsewhere) —
+    # this default just keeps a freshly-constructed object consistent.
+    self.record_video = record_video
 
 def secret_settings(settings):
     return GlobalSettings(
@@ -2140,7 +2535,8 @@ def secret_settings(settings):
         userID=settings.userID is not None,
         key=settings.key is not None,
         use_qwen=settings.use_qwen,
-        qwen_size=settings.qwen_size
+        qwen_size=settings.qwen_size,
+        record_video=getattr(settings, 'record_video', False),
     )
 
 if __name__ == "__main__":
@@ -2171,12 +2567,16 @@ if __name__ == "__main__":
   apply_model_class_names(model, class_labels, color_dict)
   object_finder = ObjectFinder()
   cam = VideoCapture()
+  cam.record_video = getattr(global_settings, 'record_video', False)
 
   if global_settings.use_clip: object_finder.init_clip()
   if global_settings.use_face: object_finder.init_face()
 
   local_descriptions.configure(global_settings.use_qwen, global_settings.qwen_size)
-  local_descriptions.retry_saved(BASE_DIR / "cameras")
+  # There is nothing saved-to-disk to recover in live-only mode: events live
+  # only in live_journal, and descriptions for them go through submit_memory.
+  if cam.record_video:
+    local_descriptions.retry_saved(BASE_DIR / "cameras")
 
   try:
     bind_host = os.environ.get("CLEARCAM_BIND_HOST", "127.0.0.1")

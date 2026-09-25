@@ -17,6 +17,7 @@ async function main() {
     currentEventDateFilter: '2026-08-30', currentEventCameraFilter: '', alertsOnlyFilter: false,
     currentImageSearchText: '', currentSimilarImage: null, uploadedImageData: null,
     is_face: false, eventStart: 0, hasMoreEvents: true, dontRefresh: false, EVENT_PAGE_SIZE: 10,
+    liveOnly: false, // record_video=true path: journal behaves exactly as before live-only mode existed
     fetch: async () => ({ok: true, json: async () => ({images: []})})
   });
   const journal = source.slice(source.indexOf('    let previousEventImages = null;'), source.indexOf('    async function loadMoreEventImages()'));

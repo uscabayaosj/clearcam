@@ -172,6 +172,20 @@
     .icon-button.detections-active { background: var(--ink-soft); color: var(--sage-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
     .live-detections { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; background: #060a0b; }
     .camera-card .detection-toggle { display: none; }
+
+    /* ---------- Per-camera scene (counts + AI caption) ---------- */
+    .camera-scene { padding: 10px 14px 0; }
+    .scene-counts { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+    .scene-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; background: var(--ink-soft); color: var(--paper-muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+    .scene-chip.scene-empty { background: transparent; padding-left: 0; }
+    .scene-caption {
+      margin-top: 4px; min-height: calc(.86rem * 1.35 * 2); color: var(--paper); font-size: .86rem; line-height: 1.35;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .scene-caption--off { visibility: hidden; }
+    .scene-caption.scene-pending { color: var(--paper-dim); font-style: italic; }
+    .scene-ai-label { margin-right: 5px; font-size: .68rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--paper-dim); }
+    .scene-age { margin-left: 6px; color: var(--paper-dim); font-size: .76rem; font-weight: 400; font-style: normal; text-transform: none; letter-spacing: 0; }
     .multi-view-wrapper { display: none; }
 
     /* Multi-camera wall */
@@ -509,7 +523,7 @@
       <section class="camera-reel-section" aria-labelledby="camera-reel-heading">
         <div class="section-heading">
           <h2 id="camera-reel-heading">Cameras</h2>
-          <label for="streamDateSelect" class="local-status">Replay <select id="streamDateSelect"><option value="">Loading dates…</option></select></label>
+          <label for="streamDateSelect" class="local-status" id="replayDateGroup">Replay <select id="streamDateSelect"><option value="">Loading dates…</option></select></label>
         </div>
         <div id="cameraList" class="camera-grid"><div class="camera-empty"><div><strong>No cameras are connected yet.</strong>Add your first camera locally.</div></div></div>
       </section>
@@ -522,14 +536,14 @@
         <section class="events-section" aria-labelledby="journal-heading">
           <div class="journal-heading">
             <div><h2 id="journal-heading">Daily journal</h2><button id="journalRetry" class="retry-journal" type="button" hidden onclick="window.location.reload()">Try again</button></div>
-            <p>Recent detections from your own cameras.</p>
+            <p id="journalSubtext">Recent detections from your own cameras.</p>
           </div>
           <div class="events-filter">
             <div class="filter-group">
               <label for="cameraFilter">Camera</label>
               <select id="cameraFilter"><option value="">All cameras</option></select>
             </div>
-            <div class="filter-group">
+            <div class="filter-group" id="eventDateFilterGroup">
               <label for="eventDateFilter">Date</label>
               <select id="eventDateFilter"><option value="">Loading dates…</option></select>
             </div>
@@ -564,7 +578,7 @@
           <div class="ledger-row"><span>Video processing</span><strong class="ledger-good">Local</strong></div>
           <div class="ledger-row"><span>AI descriptions</span><strong id="localAIState" role="status">Checking…</strong></div>
           <div class="ledger-row"><span>Alert rules</span><strong id="notificationState">Checking…</strong></div>
-          <div class="ledger-row"><span>Review date</span><strong id="reviewState">Checking…</strong></div>
+          <div class="ledger-row"><span id="reviewLabel">Review date</span><strong id="reviewState">Checking…</strong></div>
           <p id="pipelineDetail" role="status"></p>
           <div id="storageWarning" role="alert" class="storage-warning" hidden>
             <span id="storageWarningText"></span>
@@ -666,7 +680,7 @@
         </div>
 
         <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-          <button type="button" role="tab" class="settings-tab" data-panel="panelCameras" aria-selected="true">Cameras &amp; storage</button>
+          <button type="button" role="tab" class="settings-tab" id="tabPanelCameras" data-panel="panelCameras" aria-selected="true">Cameras &amp; storage</button>
           <button type="button" role="tab" class="settings-tab" data-panel="panelAI" aria-selected="false">Detection &amp; AI</button>
           <button type="button" role="tab" class="settings-tab" data-panel="panelSummary" aria-selected="false">Daily summary</button>
           <button type="button" role="tab" class="settings-tab" data-panel="panelHousehold" aria-selected="false">Household</button>
@@ -689,7 +703,7 @@
           <button type="submit">Add Camera</button>
         </form>
       </div>
-      <div class="setup-group">
+      <div class="setup-group" id="storageSetupGroup">
         <h4>Storage</h4>
         <div class="storage-row">
           <label for="maxStorageInput">Keep recordings up to</label>
@@ -961,6 +975,70 @@
     let is_face = false;
     let autoRefreshInterval = null;
     let dontRefresh = false;
+
+    // --- Live-only mode: no recordings, no replay, in-memory journal -----
+    let liveOnly = false;
+    let liveOnlyPromise = null;
+    async function fetchLiveMode() {
+      try {
+        const res = await fetch('/live_mode');
+        if (res.ok) {
+          const data = await res.json();
+          liveOnly = data.record_video === false;
+        }
+      } catch (_) { /* keep last known mode */ }
+      applyLiveOnlyUI();
+      return liveOnly;
+    }
+    function ensureLiveMode() {
+      if (!liveOnlyPromise) liveOnlyPromise = fetchLiveMode();
+      return liveOnlyPromise;
+    }
+    function applyLiveOnlyUI() {
+      const replayGroup = document.getElementById('replayDateGroup');
+      if (replayGroup) replayGroup.hidden = liveOnly;
+      const eventDateGroup = document.getElementById('eventDateFilterGroup');
+      if (eventDateGroup) eventDateGroup.hidden = liveOnly;
+      const reviewLabel = document.getElementById('reviewLabel');
+      const reviewState = document.getElementById('reviewState');
+      if (liveOnly) {
+        if (reviewLabel) reviewLabel.textContent = 'Recording';
+        if (reviewState) reviewState.textContent = 'Off — live only';
+      } else {
+        if (reviewLabel) reviewLabel.textContent = 'Review date';
+        if (typeof updateReviewDate === 'function') updateReviewDate();
+      }
+      const storageGroup = document.getElementById('storageSetupGroup');
+      if (storageGroup) storageGroup.hidden = liveOnly;
+      if (liveOnly) {
+        const storageWarning = document.getElementById('storageWarning');
+        if (storageWarning) storageWarning.hidden = true;
+      }
+      const tab = document.getElementById('tabPanelCameras');
+      if (tab) tab.textContent = liveOnly ? 'Cameras' : 'Cameras & storage';
+      const journalSubtext = document.getElementById('journalSubtext');
+      if (journalSubtext) journalSubtext.textContent = liveOnly
+        ? 'Alerts since ClearCam started. Nothing is saved.'
+        : 'Recent detections from your own cameras.';
+      if (liveOnly) {
+        const searchRow = document.getElementById('journalSearch');
+        if (searchRow) searchRow.style.display = 'none';
+      }
+    }
+    // Called after saving the "Keep recordings" setting: re-learn the mode,
+    // then rebuild everything that assumed the old mode (cards + journal).
+    async function rebuildForLiveModeChange() {
+      liveOnlyPromise = fetchLiveMode();
+      await liveOnlyPromise;
+      document.querySelectorAll('.camera-card').forEach(card => {
+        if (card.dataset.camera) cleanupCameraStream(card.dataset.camera);
+      });
+      document.getElementById('cameraList').innerHTML = '';
+      window.currentCameras = null;
+      await fetchCameras();
+      loadEventImages(false);
+      loadFeatureFlags();
+    }
 
     const descInput = document.getElementById("alertDesc");
     const thresholdInput = document.getElementById("alertThreshold");
@@ -1565,6 +1643,7 @@
     }
 
     async function fetchCameras() {
+      await ensureLiveMode();
       const container = document.getElementById("cameraList");
       try {
       const res = await fetch('/list_cameras');
@@ -1673,14 +1752,20 @@
       const card = document.createElement('div');
       card.className = 'camera-card';
       card.dataset.camera = camName;
-      
+
       const videoId = `video-${camName}`;
       const placeholderId = `placeholder-${camName}`;
-      
+      const mediaHtml = liveOnly ? `<img class="live-detections" alt="">` : `<video controls muted playsinline></video>`;
+
       card.innerHTML = `
         <div class="video-container">
-          <video controls muted playsinline></video>
+          ${mediaHtml}
           <div class="video-placeholder">Loading stream...</div>
+        </div>
+        <div class="camera-scene" role="status" aria-live="off">
+          <span class="visually-hidden scene-sr-label"></span>
+          <div class="scene-counts"><span class="scene-chip scene-empty">Nothing detected</span></div>
+          <p class="scene-caption"></p>
         </div>
         <div class="camera-info">
           <span class="camera-name"></span>
@@ -1715,15 +1800,28 @@
           </div>
         </div>
       `;
-      card.querySelector('video').id = videoId;
+      if (liveOnly) {
+        const img = card.querySelector('.live-detections');
+        img.alt = `Live view of ${camName}`;
+        img.addEventListener('error', () => onLiveOnlyImgError(camName));
+        img.addEventListener('load', () => hideReconnectOverlay(camName));
+      } else {
+        card.querySelector('video').id = videoId;
+      }
       card.querySelector('.video-placeholder').id = placeholderId;
       card.querySelector('.camera-name').textContent = camName;
-      card.querySelector('.detections-toggle').addEventListener('click', () => toggleLiveDetections(camName));
+      card.querySelector('.scene-sr-label').textContent = `Currently seen by ${camName}`;
+      const detectionsToggle = card.querySelector('.detections-toggle');
+      if (liveOnly) {
+        detectionsToggle.title = 'Show detection boxes';
+        detectionsToggle.setAttribute('aria-label', 'Show detection boxes');
+      }
+      detectionsToggle.addEventListener('click', () => toggleLiveDetections(camName));
       [openSettingsEditor, openAlertsModal, deleteCamera].forEach((action, index) => {
         card.querySelectorAll('.icon-button:not(.detections-toggle)')[index].addEventListener('click', () => action(camName));
       });
       card.addEventListener('click', (event) => {
-        if (event.target.closest('button, video')) return;
+        if (event.target.closest('button, video, .live-detections')) return;
         document.querySelectorAll('.camera-card').forEach(item => item.classList.remove('selected'));
         card.classList.add('selected');
         card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
@@ -1805,6 +1903,9 @@
     }
 
     async function loadFeatureFlags() {
+      await ensureLiveMode();
+      const searchRowEl = document.getElementById('journalSearch');
+      if (liveOnly) { if (searchRowEl) searchRowEl.style.display = 'none'; return; }
       const response = await fetch('/get_global_settings');
       const features = await response.json();
       const uploadContainer = document.getElementById('journalSearchIcons');
@@ -2067,11 +2168,12 @@
     }
 
     function startCameraStream(camName) {
+      if (liveOnly) { startLiveOnlyCard(camName); return; }
       const videoId = `video-${camName}`;
       const placeholderId = `placeholder-${camName}`;
       const video = document.getElementById(videoId);
       const placeholder = document.getElementById(placeholderId);
-      
+
       if (!video) {
         console.warn(`Video element not found for ${camName}`);
         return;
@@ -2211,6 +2313,13 @@
     }
 
     function cleanupCameraStream(camName) {
+      if (liveOnly) {
+        clearTimeout(liveReconnectTimers.get(camName));
+        liveReconnectTimers.delete(camName);
+        const img = findCameraCard(camName)?.querySelector('.live-detections');
+        if (img) img.removeAttribute('src');
+        return;
+      }
       const streamInfo = activeVideoStreams.get(camName);
       if (streamInfo) {
         if (streamInfo.hls && typeof streamInfo.hls.destroy === 'function') {
@@ -2233,6 +2342,52 @@
     // tab is hidden, and when a camera card goes away.
     function findCameraCard(camName) {
       return document.querySelector(`.camera-card[data-camera="${CSS.escape(camName)}"]`);
+    }
+
+    // --- Live-only camera card: the MJPEG <img> is the picture itself ----
+    const liveReconnectTimers = new Map();
+    function showReconnectOverlay(camName) {
+      const card = findCameraCard(camName);
+      const placeholder = card?.querySelector('.video-placeholder');
+      if (placeholder) { placeholder.textContent = `Reconnecting to ${camName}…`; placeholder.style.display = 'flex'; }
+    }
+    function hideReconnectOverlay(camName) {
+      const card = findCameraCard(camName);
+      const placeholder = card?.querySelector('.video-placeholder');
+      if (placeholder) placeholder.style.display = 'none';
+    }
+    function setLiveImgSrc(camName, boxesOn) {
+      const card = findCameraCard(camName);
+      const img = card?.querySelector('.live-detections');
+      if (!img) return;
+      img.src = `/live_view?cam=${encodeURIComponent(camName)}${boxesOn ? '' : '&boxes=0'}`;
+    }
+    function onLiveOnlyImgError(camName) {
+      showReconnectOverlay(camName);
+      clearTimeout(liveReconnectTimers.get(camName));
+      const timer = setTimeout(() => setLiveImgSrc(camName, detectionPreferredOn(camName)), 5000);
+      liveReconnectTimers.set(camName, timer);
+    }
+    function startLiveOnlyCard(camName) {
+      const card = findCameraCard(camName);
+      if (!card) return;
+      const well = card.querySelector('.video-container');
+      if (!well) return;
+      let badge = well.querySelector('.stream-badge');
+      if (!badge) { badge = document.createElement('span'); badge.className = 'stream-badge'; well.appendChild(badge); }
+      well.dataset.live = 'true';
+      const boxesOn = detectionPreferredOn(camName);
+      const btn = card.querySelector('.detections-toggle');
+      if (btn) {
+        btn.disabled = false;
+        btn.title = 'Show detection boxes';
+        btn.setAttribute('aria-label', 'Show detection boxes');
+        btn.setAttribute('aria-pressed', String(boxesOn));
+        btn.classList.toggle('detections-active', boxesOn);
+      }
+      badge.classList.add('stream-badge-live');
+      badge.textContent = boxesOn ? 'LIVE · AI' : 'LIVE';
+      setLiveImgSrc(camName, boxesOn);
     }
 
     function loadDetectionPrefs() {
@@ -2345,8 +2500,16 @@
       const btn = findCameraCard(camName)?.querySelector('.detections-toggle');
       if (!btn || btn.disabled) return;
       const turningOn = btn.getAttribute('aria-pressed') !== 'true';
-      delete btn.dataset.errored;
       saveDetectionPref(camName, turningOn);
+      if (liveOnly) {
+        btn.setAttribute('aria-pressed', String(turningOn));
+        btn.classList.toggle('detections-active', turningOn);
+        const badge = findCameraCard(camName)?.querySelector('.stream-badge');
+        if (badge) badge.textContent = turningOn ? 'LIVE · AI' : 'LIVE';
+        setLiveImgSrc(camName, turningOn);
+        return;
+      }
+      delete btn.dataset.errored;
       setLiveDetectionsView(camName, turningOn);
     }
 
@@ -2354,7 +2517,18 @@
       document.querySelectorAll('.camera-card').forEach(card => {
         const camName = card.dataset.camera;
         const btn = card.querySelector('.detections-toggle');
-        if (!camName || !btn || btn.disabled) return;
+        if (!camName || !btn) return;
+        if (liveOnly) {
+          const img = card.querySelector('.live-detections');
+          if (document.hidden) {
+            clearTimeout(liveReconnectTimers.get(camName));
+            if (img) img.removeAttribute('src');
+          } else {
+            setLiveImgSrc(camName, detectionPreferredOn(camName));
+          }
+          return;
+        }
+        if (btn.disabled) return;
         const img = card.querySelector('.live-detections');
         if (document.hidden) {
           if (img) img.removeAttribute('src');
@@ -2389,7 +2563,7 @@
         const input = document.getElementById('maxStorageInput');
         const warning = document.getElementById('storageWarning');
         document.getElementById('storageWarningText').textContent = data.warning || '';
-        warning.hidden = !data.warning;
+        warning.hidden = liveOnly || !data.warning;   // nothing is stored in live-only mode
         if (input && data.max_gb !== undefined && !input.dataset.dirty && document.activeElement !== input) {
           input.value = data.max_gb;
         }
@@ -2549,6 +2723,21 @@
       container.style.gridTemplateRows = `repeat(${rows}, auto)`;
       container.innerHTML = '';
 
+      if (liveOnly) {
+        cams.forEach(cam => {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'video-wrapper';
+          const img = document.createElement('img');
+          img.alt = `Live view of ${cam}`;
+          img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'cover';
+          img.src = `/live_view?cam=${encodeURIComponent(cam)}`;
+          wrapper.appendChild(img);
+          container.appendChild(wrapper);
+        });
+        if (container.requestFullscreen) container.requestFullscreen();
+        return;
+      }
+
       cams.forEach(cam => {
         const encoded = encodeURIComponent(cam);
         const liveDay = currentStreamDate === new Date().toLocaleDateString('en-CA');
@@ -2602,6 +2791,7 @@
           console.warn('Error cleaning video', e);
         }
       });
+      container.querySelectorAll('img').forEach(img => img.removeAttribute('src'));
 
       container.innerHTML = '';
       container.classList.remove('active');
@@ -2819,8 +3009,9 @@
           if (!append) container.replaceChildren();
           container.appendChild(fragment);
         } else {
-          container.innerHTML =
-            '<p class="journal-empty">No events detected yet.</p>';
+          container.innerHTML = liveOnly
+            ? '<p class="journal-empty">No alerts yet. When an alert rule fires, what the camera saw is described here.</p>'
+            : '<p class="journal-empty">No events detected yet.</p>';
         }
       } catch (err) {
         if (err.name === 'AbortError' || eventRequest !== request) return;
@@ -3136,9 +3327,15 @@
     function renderSettings(settings) {
       const container = document.getElementById("settingsContainer");
       container.innerHTML = "";
-      Object.entries(settings).forEach(([key, value]) => {
+      const orderedEntries = Object.entries(settings).sort((a, b) => {
+        if (a[0] === 'record_video') return -1;
+        if (b[0] === 'record_video') return 1;
+        return 0;
+      });
+      orderedEntries.forEach(([key, value]) => {
 
       const labelMap = {
+        "record_video": "Keep recordings",
         "use_clip": "Search by description",
         "use_face": "Face search (experimental)",
         "model_size": "Detection model",
@@ -3150,6 +3347,7 @@
         };
 
       const tooltipMap = {
+        "record_video": "Off: ClearCam only watches live and describes alerts; nothing is saved to disk. On: records video and keeps event snapshots, using several GB a day.",
         "use_clip": "Search your events with plain language (\"red car yesterday\") or a similar image. Runs on this Mac.",
         "use_face": "Find events by face image. Household recognition on journal events works independently of this.",
         "model_size": "Larger models spot small and distant objects more reliably and cost more of this Mac per frame. Only sizes included in this build are listed.",
@@ -3330,8 +3528,15 @@
         throw new Error(reason || '');
       }
       closeSettingsModal();
-      announce('Settings saved.');
-      loadFeatureFlags();
+      if (Object.prototype.hasOwnProperty.call(payload, 'record_video')) {
+        await rebuildForLiveModeChange();
+        announce(liveOnly
+          ? 'Live only. Nothing is saved to disk.'
+          : 'Recording on. Video and event snapshots are saved to this Mac.');
+      } else {
+        announce('Settings saved.');
+        loadFeatureFlags();
+      }
       refreshLocalAIStatus();
       } catch (error) {
         const detail = (error && error.message || '').replace(/^Error:\s*/, '');
@@ -3363,7 +3568,9 @@
         chip.textContent = person; title.append(chip);
       }
       const date = document.createElement('small');
-      const when = Number.isFinite(img.captured_at) ? new Date(img.captured_at * 1000).toLocaleString() : `Video · ${secondsToTimeString(img.playback_offset ?? 0)}`;
+      const when = Number.isFinite(img.captured_at)
+        ? (liveOnly ? formatEventTime(img.captured_at) : new Date(img.captured_at * 1000).toLocaleString())
+        : `Video · ${secondsToTimeString(img.playback_offset ?? 0)}`;
       date.textContent = `${when}${typeof img.score === 'number' ? ` | Match: ${img.score.toFixed(2)}` : ''}`;
       if (img.time_source === 'file_time') date.title = 'Time estimated from the saved event image';
       info.append(title, document.createElement('br'), date);
@@ -3372,7 +3579,15 @@
         const label = document.createElement('small'); label.textContent = 'AI description';
         description.append(label, document.createTextNode(img.description));
         info.append(description);
-      } else if (window.localAIEnabled) {
+      } else if (img.description_state === 'pending') {
+        const pending = document.createElement('small'); pending.className = 'event-pending';
+        pending.textContent = 'AI description on the way — it appears here when ready.';
+        info.append(pending);
+      } else if (img.description_state === 'failed') {
+        const failed = document.createElement('small'); failed.className = 'event-pending';
+        failed.textContent = "Couldn't describe this alert.";
+        info.append(failed);
+      } else if (img.description_state === undefined && window.localAIEnabled) {
         const pending = document.createElement('small'); pending.className = 'event-pending';
         pending.textContent = 'AI description on the way — it appears here when ready.';
         info.append(pending);
@@ -3397,18 +3612,26 @@
         const marked = document.createElement('small'); marked.className = 'correction-state'; marked.textContent = verdictText;
         info.append(marked);
       }
-      const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder), 'Play');
-      play.disabled = !Number.isFinite(img.playback_offset);
-      if (play.disabled) {
-        play.title = 'Recording for this event is unavailable';
-        const unavailable = document.createElement('small');
-        unavailable.textContent = 'Recording unavailable';
-        info.append(document.createElement('br'), unavailable);
+      if (!liveOnly) {
+        const play = action('Play event', 'icon-play', () => playVideoAtTime(img.cam_name, img.playback_offset, img.folder), 'Play');
+        play.disabled = !Number.isFinite(img.playback_offset);
+        if (play.disabled) {
+          play.title = 'Recording for this event is unavailable';
+          const unavailable = document.createElement('small');
+          unavailable.textContent = 'Recording unavailable';
+          info.append(document.createElement('br'), unavailable);
+        }
+        const all = action('Play all cameras', 'icon-play-all', () => playAllCamerasAtTime(img.captured_at, img.folder), 'All cams');
+        all.disabled = !Number.isFinite(img.captured_at);
       }
-      const all = action('Play all cameras', 'icon-play-all', () => playAllCamerasAtTime(img.captured_at, img.folder), 'All cams');
-      all.disabled = !Number.isFinite(img.captured_at);
       card.append(preview, info, actions);
       return card;
+    }
+
+    function formatEventTime(capturedAt) {
+      const d = new Date(capturedAt * 1000);
+      const sameDay = new Date().toLocaleDateString('en-CA') === d.toLocaleDateString('en-CA');
+      return sameDay ? d.toLocaleTimeString() : d.toLocaleString();
     }
 
     let announceHideTimer = null;
@@ -3498,6 +3721,7 @@
     document.getElementById('imageSearchInput').setAttribute('aria-label', 'Search observations by text');
 
     function updateReviewDate() {
+      if (liveOnly) { document.getElementById('reviewState').textContent = 'Off — live only'; return; }
       const select = document.getElementById('eventDateFilter');
       document.getElementById('reviewState').textContent = select.selectedOptions[0]?.textContent || 'No date selected';
     }
@@ -3543,6 +3767,78 @@
     }
     fetchCameras();
     pollVisible(fetchCameras, 5000);
+
+    // --- Per-camera scene: live counts + AI caption, polled every 2s -----
+    function pluralizeSceneLabel(label, count) {
+      if (count === 1) return label;
+      if (label === 'person') return 'people';
+      if (/(s|x|z|ch|sh)$/i.test(label)) return label + 'es';
+      return label + 's';
+    }
+    function formatSceneAge(ts) {
+      if (!Number.isFinite(ts)) return '';
+      const seconds = Math.max(0, Math.round(Date.now() / 1000 - ts));
+      if (seconds < 10) return 'just now';
+      if (seconds < 60) return `${seconds}s ago`;
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'} ago`;
+      const hours = Math.round(minutes / 60);
+      return `${hours} hr${hours === 1 ? '' : 's'} ago`;
+    }
+    function escapeSceneHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+    function updateSceneUI(camName, scene) {
+      const card = findCameraCard(camName);
+      if (!card) return;
+      const countsEl = card.querySelector('.scene-counts');
+      const captionEl = card.querySelector('.scene-caption');
+      if (!countsEl || !captionEl) return;
+
+      const counts = (scene && scene.counts) || {};
+      const total = Number.isFinite(scene?.total) ? scene.total : Object.values(counts).reduce((a, b) => a + b, 0);
+      const entries = Object.entries(counts).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+      const newCountsHtml = total === 0
+        ? '<span class="scene-chip scene-empty">Nothing detected</span>'
+        : entries.map(([label, n]) => `<span class="scene-chip">${n} ${escapeSceneHtml(pluralizeSceneLabel(label, n))}</span>`).join('');
+      if (countsEl.dataset.rendered !== newCountsHtml) {
+        countsEl.innerHTML = newCountsHtml;
+        countsEl.dataset.rendered = newCountsHtml;
+      }
+
+      const state = scene?.caption_state || 'idle';
+      if (state === 'off') {
+        captionEl.classList.add('scene-caption--off');
+        captionEl.classList.remove('scene-pending');
+        return;
+      }
+      captionEl.classList.remove('scene-caption--off');
+      if (scene?.caption) {
+        captionEl.classList.remove('scene-pending');
+        const age = formatSceneAge(scene.caption_at);
+        captionEl.title = scene.caption;
+        captionEl.innerHTML = `<span class="scene-ai-label">AI</span>${escapeSceneHtml(scene.caption)}${age ? `<span class="scene-age">${age}</span>` : ''}`;
+      } else if (state === 'pending') {
+        captionEl.classList.add('scene-pending');
+        captionEl.removeAttribute('title');
+        captionEl.textContent = 'Describing…';
+      } else {
+        captionEl.classList.remove('scene-pending');
+        captionEl.removeAttribute('title');
+        captionEl.textContent = '';
+      }
+    }
+    async function fetchLiveScene() {
+      try {
+        const res = await fetch('/live_scene');
+        if (!res.ok) return;
+        const data = await res.json();
+        const cams = (data && data.cameras) || {};
+        Object.entries(cams).forEach(([camName, scene]) => updateSceneUI(camName, scene));
+      } catch (_) { /* keep last rendered scene until the next poll succeeds */ }
+    }
+    fetchLiveScene();
+    pollVisible(fetchLiveScene, 2000);
     refreshEngineStatus();
     pollVisible(refreshEngineStatus, 10000);
     // In-world confirmation: states what is kept and what is destroyed instead
@@ -3666,7 +3962,8 @@
       button.disabled = true; button.textContent = 'Learning face…';
       feedback.textContent = '';
       try {
-        const query = new URLSearchParams({name, image: new URL(enrollImageUrl, location.origin).pathname});
+        const enrollUrl = new URL(enrollImageUrl, location.origin);
+        const query = new URLSearchParams({name, image: enrollUrl.pathname + enrollUrl.search});
         const response = await fetch('/household_enroll?' + query);
         if (!response.ok) throw new Error((await response.text()).replace(/<[^>]*>/g, ' ').match(/Message: ([^.]*)/)?.[1] || 'Enrollment failed');
         closeEnrollModal();

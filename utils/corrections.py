@@ -79,6 +79,34 @@ def record_correction(data_root, event_path, verdict, label=None):
     return entry
 
 
+def record_correction_bytes(data_root, image_bytes, name, detections, width, height, verdict, label, camera, crop_bytes=None):
+    """Same durable record as record_correction, for a live-only in-memory event.
+
+    There is no on-disk event to copy or write a sidecar beside: the image
+    (and optional trigger crop) bytes are written straight into
+    Data/corrections, and the caller updates its own in-memory record.
+    """
+    if verdict not in VERDICTS: raise ValueError('Unknown verdict')
+    if verdict == 'wrong_label' and not label: raise ValueError('A corrected label is required')
+    store = Path(data_root) / 'corrections'
+    images = store / 'images'
+    images.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time() * 1000)
+    safe_name = Path(str(name)).name or 'event.jpg'
+    kept_image = images / f'{stamp}_{safe_name}'
+    kept_image.write_bytes(image_bytes)
+    kept_crop = None
+    if crop_bytes:
+        kept_crop = images / f'{stamp}_{Path(safe_name).stem}.trigger.jpg'
+        kept_crop.write_bytes(crop_bytes)
+    entry = dict(time=time.time(), verdict=verdict, label=label, image=kept_image.name,
+                 crop=kept_crop.name if kept_crop else None, camera=camera,
+                 width=width, height=height, detections=detections or [])
+    with (store / 'corrections.jsonl').open('a') as stream:
+        stream.write(json.dumps(entry) + '\n')
+    return entry
+
+
 def load_corrections(data_root):
     path = Path(data_root) / 'corrections' / 'corrections.jsonl'
     if not path.is_file(): return []

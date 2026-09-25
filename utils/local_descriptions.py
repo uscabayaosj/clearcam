@@ -1,8 +1,12 @@
 """Bounded local event descriptions; recording never waits for the model."""
 import json
+import os
 import queue
+import stat
+import tempfile
 import threading
 import logging
+import uuid
 from pathlib import Path
 
 PROMPT = "Describe only what is visibly happening in this camera image in one short sentence. Do not infer identity, intent, or events outside the image."
@@ -32,15 +36,14 @@ def trigger_prompt(label, box, width, height):
             f"starts with \"A {label}\" and says what it is visibly doing, then adds only essential "
             "surroundings. Do not infer identity or intent. Do not mention detection, boxes, or the frame.")
 
-def write_trigger_crop(frame, box, event_path, margin=1.0, min_side=320):
-    """Save the region around the triggering box (un-annotated) for description.
+def trigger_crop(frame, box, margin=1.0, min_side=320):
+    """Region (ndarray) around the triggering box (un-annotated), or None.
 
     A 2x crop carries the subject at far higher pixel density than the whole
     frame, and the model spends its vision budget on the thing that fired
-    rather than on scenery. Returns None so callers fall back to the frame.
+    rather than on scenery. Pure: does not touch disk.
     """
     try:
-        import cv2
         H, W = frame.shape[:2]
         x1, y1, x2, y2 = map(float, box)
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
@@ -49,11 +52,45 @@ def write_trigger_crop(frame, box, event_path, margin=1.0, min_side=320):
         a, b = int(max(0, cx - hw)), int(min(W, cx + hw))
         c, d = int(max(0, cy - hh)), int(min(H, cy + hh))
         if b - a < 64 or d - c < 64: return None
+        return frame[c:d, a:b]
+    except Exception:
+        return None
+
+
+def write_trigger_crop(frame, box, event_path, margin=1.0, min_side=320):
+    """Save the region around the triggering box (un-annotated) for description.
+
+    Returns None so callers fall back to the frame.
+    """
+    try:
+        import cv2
+        crop = trigger_crop(frame, box, margin=margin, min_side=min_side)
+        if crop is None: return None
         target = Path(str(event_path)).with_suffix('.trigger.jpg')
-        cv2.imwrite(str(target), frame[c:d, a:b], [cv2.IMWRITE_JPEG_QUALITY, 88])
+        cv2.imwrite(str(target), crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
         return target
     except Exception:
         return None
+
+
+def live_temp_dir():
+    directory = Path(tempfile.gettempdir()) / 'clearcam-live'
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, stat.S_IRWXU)  # 0o700: this Mac user only
+    except OSError:
+        pass
+    return directory
+
+
+def _sweep_live_temp_dir():
+    """Delete any leftovers from a previous run (crash, kill -9)."""
+    directory = live_temp_dir()
+    for child in directory.glob('*'):
+        try:
+            if child.is_file(): child.unlink()
+        except OSError:
+            pass
 
 
 def default_model_factory():
@@ -90,6 +127,7 @@ class LocalDescriptions:
         self.last_backfill = 0.0
         self.model = None
         self.model_size = None
+        _sweep_live_temp_dir()
         threading.Thread(target=self._run, daemon=True, name='LocalQwen').start()
 
     def configure(self, enabled, size=2):
@@ -110,6 +148,35 @@ class LocalDescriptions:
             self.jobs.put_nowait((Path(image_path), camera_name, (notify, prompt, image_override)))
             return True
         except queue.Full:
+            return False
+
+    def submit_memory(self, image_bytes, camera_name, notify, prompt, on_result):
+        """Describe raw JPEG bytes with no file left behind afterwards.
+
+        Writes the bytes to a private temp file (0o700 dir under
+        tempfile.gettempdir()/'clearcam-live') so the model call can reuse the
+        same path-based pipeline; the temp file is always deleted, even if the
+        model raises. on_result(text or None) always runs.
+        """
+        if not self.enabled:
+            on_result(None)
+            return False
+        directory = live_temp_dir()
+        temp_path = directory / f'{uuid.uuid4().hex}.jpg'
+        try:
+            temp_path.write_bytes(image_bytes)
+        except OSError:
+            on_result(None)
+            return False
+        try:
+            self.jobs.put_nowait(('memory', temp_path, (camera_name, notify, prompt, on_result)))
+            return True
+        except queue.Full:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            on_result(None)
             return False
 
     def submit_summary(self, prompt, on_result):
@@ -159,10 +226,13 @@ class LocalDescriptions:
     def _run(self):
         while True:
             path, camera_name, notify = self.jobs.get()
-            prompt, image_override = PROMPT, None
-            if isinstance(notify, tuple):
+            if path == 'summary' or path == 'memory':
+                pass  # notify carries this job kind's own payload tuple below
+            elif isinstance(notify, tuple):
                 notify, override, image_override = (tuple(notify) + (None, None))[:3]
                 prompt = override or PROMPT
+            else:
+                prompt, image_override = PROMPT, None
             if path == 'summary':
                 prompt, on_result = camera_name, notify
                 try:
@@ -182,6 +252,40 @@ class LocalDescriptions:
                     self.state = 'ready'
                     on_result(None)
                 finally:
+                    self.jobs.task_done()
+                continue
+            if path == 'memory':
+                temp_path = camera_name
+                cam_name_actual, memory_notify, memory_prompt, on_result = notify
+                try:
+                    if self.model is None or self.model_size != self.size:
+                        if self.model is not None and hasattr(self.model, 'close'):
+                            self.model.close()
+                        self.state = 'loading_model'
+                        self.model = self.model_factory(size=f'{self.size}B', res=(448, 448))
+                        self.model_size = self.size
+                    self.state = 'describing'
+                    text = self.model.generate(prompt=memory_prompt or PROMPT, image_path=temp_path.resolve(),
+                                               reset=True, max_tokens=96, quiet=True, on_state=self._set_state).strip()
+                    self.state, self.error, self.failure = 'ready', None, None
+                    if text and memory_notify:
+                        from utils.macos_notifications import send
+                        send(f'AI description — {cam_name_actual}', text)
+                    on_result(text or None)
+                except Exception as exc:
+                    logging.getLogger(__name__).exception('Local Qwen description (memory) failed')
+                    if self.model is not None and hasattr(self.model, 'close'):
+                        self.model.close()
+                    self.model, self.model_size = None, None
+                    self.failure = exc
+                    self.state = 'error'
+                    self.error = f'Local description failed ({type(exc).__name__}). Recording is unaffected.'
+                    on_result(None)
+                finally:
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
                     self.jobs.task_done()
                 continue
             try:
