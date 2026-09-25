@@ -427,6 +427,9 @@ class VideoCapture:
     self.live_link = {}
     self.live_link_lock = {}
     self.pipeline = {}
+    # per camera: (timestamp, Nx7 array) of every confirmed track, unfiltered
+    # by alert zones/speed, for the live-view overlay only.
+    self.live_boxes = {}
 
     #self.last_shapes_time = time.time()
     #self.det_shapes = []
@@ -761,7 +764,7 @@ class VideoCapture:
             print(f"\rFPS: {fps:.2f}", end="", flush=True)
           else:
             self.last_frame_num[cam_name] = self.frame_num[cam_name]
-            self.last_preds = []
+            self.last_preds[cam_name] = []
 
         filtered_preds = self.last_preds[cam_name]
 
@@ -922,6 +925,10 @@ class VideoCapture:
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
     thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.5) or 0.5 #todo clean!
     online_targets = self.tracker[cam_name].update(preds, thresh)
+    # Every confirmed track, before the alert filters below drop stationary or
+    # out-of-zone objects: the live view shows a parked car or a sleeping
+    # person even though alerts (rightly) ignore them.
+    self.live_boxes[cam_name] = (time.time(), np.array([[t.tlwh[0], t.tlwh[1], t.tlwh[0]+t.tlwh[2], t.tlwh[1]+t.tlwh[3], t.score, t.class_id, t.track_id] for t in online_targets if t.tracklet_len >= 1], dtype=np.float32).reshape(-1, 7))
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
     preds = []
     for x in online_targets:
@@ -981,6 +988,41 @@ def draw_predictions(frame, preds, color_dict):
     font_color = (0, 0, 0) if is_bright_color(color) else (255, 255, 255)
     frame = draw_rectangle_numpy(frame, (x1, y1 - text_height - 10), (x1 + text_width + 2, y1), color, -1)
     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, font_color, 1, cv2.LINE_AA)
+  return frame
+
+def draw_live_boxes(frame, boxes):
+  """Cheap overlay for the /live_view MJPEG stream: a rounded-look rectangle
+  (cv2.rectangle, LINE_AA) plus a filled label chip in the class colour,
+  clamped inside the frame. `boxes` is an Nx7 array of
+  [x1,y1,x2,y2,conf,cls,track_id]; drawing is in place, no per-frame
+  allocations beyond the caller's frame copy."""
+  if boxes is None or len(boxes) == 0: return frame
+  h, w = frame.shape[:2]
+  if h <= 0 or w <= 0: return frame
+  font = cv2.FONT_HERSHEY_SIMPLEX
+  scale = max(0.35, 0.5 * h / 720)
+  neutral = (140, 140, 140)
+  for x1, y1, x2, y2, conf, cls, _ in boxes:
+    x1, y1 = max(0, int(x1)), max(0, int(y1))
+    x2, y2 = min(w - 1, int(x2)), min(h - 1, int(y2))
+    if x2 <= x1 or y2 <= y1: continue
+    cls_i = int(cls)
+    in_range = 0 <= cls_i < len(class_labels)
+    label_name = class_labels[cls_i] if in_range else str(cls_i)
+    color = color_dict.get(label_name, neutral) if in_range else neutral
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+
+    label = f"{label_name} {int(round(conf * 100))}%"
+    (tw, th), baseline = cv2.getTextSize(label, font, scale, 1)
+    pad_x, pad_y = 6, 4
+    chip_w, chip_h = tw + pad_x * 2, th + baseline + pad_y * 2
+    chip_x1 = min(max(0, x1), max(0, w - chip_w))
+    chip_y1 = y1 - chip_h
+    if chip_y1 < 0: chip_y1 = min(y1, max(0, h - chip_h))  # box touches the top: chip drops inside instead
+    chip_x2, chip_y2 = min(w, chip_x1 + chip_w), min(h, chip_y1 + chip_h)
+    font_color = (0, 0, 0) if is_bright_color(color) else (255, 255, 255)
+    cv2.rectangle(frame, (chip_x1, chip_y1), (chip_x2, chip_y2), color, -1, cv2.LINE_AA)
+    cv2.putText(frame, label, (chip_x1 + pad_x, chip_y2 - pad_y - baseline // 2), font, scale, font_color, 1, cv2.LINE_AA)
   return frame
 
 def point_not_in_polygon(coords, poly):
@@ -1148,6 +1190,8 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             state["active_rules"] = sum(bool(rule.is_active()) for rule in counters)
             state["notification_rules"] = sum(bool(rule.is_active() and rule.is_notif) for rule in counters)
             state["frames"] = cam.frame_num.get(name, -1) + 1
+            live = cam.live_boxes.get(name)
+            state["live_boxes"] = int(live[1].shape[0]) if live is not None and now - live[0] < 1.5 else 0
             state["decoder_running"] = bool(cam.proc.get(name) and cam.proc[name].poll() is None)
             state["recorder_running"] = bool(cam.hls_proc.get(name) and cam.hls_proc[name].poll() is None)
             if not state["recorder_running"]: state["state"] = "recorder_offline"
@@ -1156,6 +1200,52 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             elif not state["last_inference"] or now - state["last_inference"] > 30: state["state"] = "inference_pending"
             states[name] = state
           self.send_200({"cameras": states, "notifications_muted_until": notifications_muted_until or None})
+          return
+
+        if parsed_path.path == "/live_view":
+          if not cam_name or cam_name not in cam.raw_frame:
+            self.send_refusal("Unknown camera", code=404)
+            return
+          self.send_response(200)
+          self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=clearcamframe")
+          self.send_header("Cache-Control", "no-store")
+          self.end_headers()
+          try:
+            last_sent_frame_num = -1
+            min_interval = 1.0 / 15  # cap at 15 fps
+            wait_deadline = time.time() + 30
+            while not cam.stopping.is_set():
+              frame = cam.raw_frame.get(cam_name)
+              if frame is None:
+                if time.time() > wait_deadline: return
+                time.sleep(0.2)
+                continue
+              frame_num = cam.frame_num.get(cam_name, -1)
+              if frame_num == last_sent_frame_num:
+                time.sleep(0.02)
+                continue
+              last_sent_frame_num = frame_num
+              loop_start = time.time()
+
+              out = frame.copy()
+              live = cam.live_boxes.get(cam_name)
+              if live is not None and loop_start - live[0] < 1.5:
+                out = draw_live_boxes(out, live[1])
+
+              ok, jpg = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 72])
+              if not ok: continue
+              payload = jpg.tobytes()
+              self.wfile.write(b"--clearcamframe\r\n")
+              self.wfile.write(b"Content-Type: image/jpeg\r\n")
+              self.wfile.write(f"Content-Length: {len(payload)}\r\n\r\n".encode('ascii'))
+              self.wfile.write(payload)
+              self.wfile.write(b"\r\n")
+              self.wfile.flush()
+
+              elapsed = time.time() - loop_start
+              if elapsed < min_interval: time.sleep(min_interval - elapsed)
+          except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
           return
 
         if parsed_path.path == "/vendor/hls.min.js":
@@ -1961,6 +2051,12 @@ cams = dict()
 active_subprocesses = []
 import socket
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    # The default listen backlog of 5 overflows when the page loads: a dozen
+    # API calls, three live players and the detection streams arrive at once,
+    # and the kernel resets the excess (ERR_CONNECTION_RESET in the page).
+    request_queue_size = 128
+    daemon_threads = True
+
     def __init__(self, server_address, RequestHandlerClass):
       ThreadingMixIn.__init__(self)
       HTTPServer.__init__(self, server_address, RequestHandlerClass)

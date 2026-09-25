@@ -426,6 +426,87 @@ def merge_class_names(base, extra):
     return out
 
 
+# Common synonyms seen in external/Universe datasets, mapped onto the
+# ClearCam vocabulary before merging. Keys are looked up after the name has
+# been lowercased, stripped, had a leading 'N-' numeric prefix removed, and
+# had underscores turned into spaces - so 'fire_hydrant' needs no entry here
+# (it becomes 'fire hydrant', matching COCO directly), but 'person_cane'
+# needs one keyed as 'person cane'. Several source names may collapse onto
+# the same target.
+ALIASES = {
+    'human': 'person',
+    'old': 'person',
+    'adolescent': 'person',
+    'adult': 'person',
+    'person cane': 'person',
+    'person crutches': 'person',
+    'person walking frame': 'person',
+    'person wheelchair': 'person',
+    'pedestrian': 'person',
+    'people': 'person',
+    'persons': 'person',
+    'kids': 'child',
+    'kid': 'child',
+    'baby': 'child',
+    'children': 'child',
+    'ambulance': 'truck',
+    'bike': 'bicycle',
+    'bicycles': 'bicycle',
+    'motorbike': 'motorcycle',
+    'e-scooter': 'scooter',
+    'kick scooter': 'scooter',
+    'kickscooter': 'scooter',
+    'pram': 'stroller',
+    'baby carriage': 'stroller',
+    'buggy': 'stroller',
+    'stop': 'stop sign',
+    'cats': 'cat',
+    'dogs': 'dog',
+    'cars': 'car',
+}
+
+
+def normalise_class(name, base_names):
+    """Normalise an external class name onto the ClearCam vocabulary.
+
+    Lowercases and strips the name, drops a leading 'N-' numeric prefix
+    (Universe datasets sometimes number their classes, e.g. '3-stroller'),
+    turns underscores into spaces, applies ALIASES, then - if the result
+    matches an existing name in base_names case-insensitively - returns that
+    base_names entry (so case and any earlier-established spelling win).
+    Otherwise returns the normalised (lowercased) name unchanged; callers
+    that only keep a fixed vocabulary (COCO + configured new classes) treat
+    a name that still doesn't match anything in base_names as unknown.
+    """
+    import re
+    norm = (name or '').strip().lower()
+    norm = re.sub(r'^\d+-', '', norm)
+    norm = norm.replace('_', ' ').strip()
+    norm = ALIASES.get(norm, norm)
+    for existing in base_names:
+        if existing.lower() == norm:
+            return existing
+    return norm
+
+
+def build_index_map(src_names, merged_names):
+    """Map each index of src_names to its index in merged_names.
+
+    Uses normalise_class to resolve aliases/case before matching. A source
+    class whose normalised name is not present in merged_names (e.g. it was
+    dropped via --drop-classes) is simply omitted from the returned map, so
+    remap_yolo_labels drops its boxes.
+    """
+    lower_pos = {n.lower(): i for i, n in enumerate(merged_names)}
+    out = {}
+    for i, name in enumerate(src_names):
+        norm = normalise_class(name, merged_names)
+        pos = lower_pos.get(norm.lower())
+        if pos is not None:
+            out[i] = pos
+    return out
+
+
 def remap_yolo_labels(labels_dir, out_dir, index_map):
     labels_dir = Path(labels_dir)
     out_dir = Path(out_dir)

@@ -13,14 +13,22 @@ What it does, and why each step exists:
      keeps only boxes where teacher and student agree, so the student learns
      from information it did not already have. Naive self-training on its own
      outputs would only amplify its own mistakes.
-  3. Fine-tunes with the backbone frozen and a small learning rate, so the
+  3. Optionally merges in one or more external Roboflow datasets
+     (--roboflow-dataset / --roboflow-version), remapping their classes onto
+     the ClearCam vocabulary and pseudo-labelling COCO classes those datasets
+     don't label themselves, so the student doesn't unlearn "car" just
+     because a doorbell dataset never bothered to box one.
+  4. Fine-tunes with the backbone frozen and a small learning rate, so the
      model adapts to these cameras without forgetting the COCO classes.
-  4. Exports Core ML as models/yolo11<size>-home.mlpackage; the engine prefers
+  5. Runs a safety gate against the stock model before installing: a tuned
+     model whose COCO mAP has collapsed is left in the work dir instead.
+  6. Exports Core ML as models/yolo11<size>-home.mlpackage; the engine prefers
      a -home package over the stock one of the same size.
 Needs the export venv (ultralytics, torch, coremltools). Ultralytics is AGPL;
 this is for personal installs unless that is resolved for distribution.
 """
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -30,6 +38,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from utils import roboflow_sync
 COCO = [l.strip() for l in (ROOT / 'models' / 'coco.names').read_text().splitlines() if l.strip()] if (ROOT / 'models' / 'coco.names').exists() else None
+
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp')
 
 
 def iou(a, b):
@@ -45,6 +55,163 @@ def to_yolo_line(cls, box, width, height):
     return f"{cls} {cx:.6f} {cy:.6f} {(x2 - x1) / width:.6f} {(y2 - y1) / height:.6f}"
 
 
+def _parse_yolo_line(line, width, height):
+    parts = line.split()
+    cls = int(parts[0])
+    cx, cy, w, h = (float(x) for x in parts[1:5])
+    x1, y1 = (cx - w / 2) * width, (cy - h / 2) * height
+    x2, y2 = (cx + w / 2) * width, (cy + h / 2) * height
+    return cls, [x1, y1, x2, y2]
+
+
+def augment_labels(existing_lines, teacher_boxes, labelled_classes, width, height,
+                    person_class=None, child_class=None):
+    """Add teacher pseudo-labels for COCO classes a dataset doesn't label itself.
+
+    existing_lines: YOLO-normalised text lines already in the label file.
+    teacher_boxes: list of (cls, [x1, y1, x2, y2] pixel box, conf) from the teacher.
+    labelled_classes: merged class indices this dataset labels itself - a
+      teacher box for one of these classes is skipped, because the dataset's
+      own (lack of a) label for it is trusted, not the teacher's guess.
+    person_class/child_class: merged indices of 'person'/'child', if both
+      exist in the vocabulary. A teacher 'person' box is also skipped when it
+      overlaps (IoU>0.3) an existing 'child' label, so a child doesn't get a
+      second, contradictory 'person' box drawn over it.
+    Returns existing_lines plus one appended line per accepted teacher box.
+    Never mutates existing_lines.
+    """
+    existing = [_parse_yolo_line(l, width, height) for l in existing_lines if l.strip()]
+    existing_boxes = [box for _cls, box in existing]
+    child_boxes = [box for cls, box in existing if child_class is not None and cls == child_class]
+    added = []
+    for cls, box, _conf in teacher_boxes:
+        if cls in labelled_classes:
+            continue
+        if any(iou(box, eb) > 0.5 for eb in existing_boxes):
+            continue
+        if person_class is not None and cls == person_class and any(iou(box, cb) > 0.3 for cb in child_boxes):
+            continue
+        added.append(to_yolo_line(cls, box, width, height))
+    return list(existing_lines) + added
+
+
+def parse_roboflow_spec(spec, default_workspace):
+    """Parse '--roboflow-dataset' SPEC: 'project:version' or 'workspace/project:version'."""
+    spec = (spec or '').strip()
+    if ':' not in spec:
+        raise ValueError(f"invalid --roboflow-dataset spec {spec!r}: expected project:version or workspace/project:version")
+    proj_part, _, version_part = spec.rpartition(':')
+    proj_part = proj_part.strip()
+    try:
+        version = int(version_part.strip())
+    except ValueError:
+        raise ValueError(f"invalid --roboflow-dataset spec {spec!r}: version {version_part!r} is not an integer")
+    if '/' in proj_part:
+        workspace, _, project = proj_part.partition('/')
+    else:
+        workspace, project = default_workspace, proj_part
+    workspace, project = workspace.strip(), project.strip()
+    if not project:
+        raise ValueError(f"invalid --roboflow-dataset spec {spec!r}: missing project")
+    if not workspace:
+        raise ValueError(f"invalid --roboflow-dataset spec {spec!r}: no workspace given and none configured")
+    return workspace, project, version
+
+
+def build_merged_names(base_names, new_classes):
+    """The fixed training vocabulary: base_names (COCO), plus each name in
+    new_classes appended in the order given (skipping blanks and names
+    already present). Unlike base_names, new_classes indices are decided
+    once, up front - not by what any particular dataset happens to contain -
+    so 'stroller','child','scooter' always land at the same indices whether
+    or not a given dataset uses all three.
+    """
+    merged = list(base_names)
+    lower_set = {n.lower() for n in merged}
+    for name in new_classes:
+        name = (name or '').strip()
+        if not name or name.lower() in lower_set:
+            continue
+        merged.append(name)
+        lower_set.add(name.lower())
+    return merged
+
+
+def build_index_map_with_drops(src_names, merged_names, drop_classes=None):
+    """Like roboflow_sync.build_index_map, but a source class normalising to
+    a name in drop_classes (case-insensitive) is excluded even if it would
+    otherwise match a class in merged_names - --drop-classes is applied
+    before COCO/new-class matching.
+    """
+    drop_set = {d.strip().lower() for d in (drop_classes or []) if d.strip()}
+    index_map = roboflow_sync.build_index_map(src_names, merged_names)
+    if not drop_set:
+        return index_map
+    out = {}
+    for i, name in enumerate(src_names):
+        norm = roboflow_sync.normalise_class(name, merged_names)
+        if norm.lower() in drop_set:
+            continue
+        if i in index_map:
+            out[i] = index_map[i]
+    return out
+
+
+def nothing_new_to_learn(new_class_names, disagreements):
+    """True when an external-data run would only reinforce the stock model.
+
+    new_class_names: names added to the vocabulary by any supplied dataset.
+    disagreements: count of local corrections that disagree with the model.
+    """
+    return not new_class_names and disagreements < 1
+
+
+def balance_repeat_factor(local_count, external_count, target_fraction=0.10, min_factor=1, max_factor=20):
+    """How many times to repeat the local corrections images in the train list.
+
+    Solves for factor such that local*factor is ~target_fraction of the
+    combined (local*factor + external) train set, clamped to
+    [min_factor, max_factor].
+    """
+    if local_count <= 0 or external_count <= 0:
+        return min_factor
+    factor = (target_fraction * external_count) / (local_count * (1 - target_fraction))
+    factor = round(factor)
+    return max(min_factor, min(max_factor, factor))
+
+
+def holdout_filenames(filenames, fraction=0.10):
+    """Deterministically pick ~fraction of filenames as a validation holdout.
+
+    Ranks filenames by the hash of their name (not by content or mtime) so
+    the same holdout is chosen on every run, independent of directory
+    iteration order.
+    """
+    names = list(filenames)
+    if not names:
+        return set()
+    ranked = sorted(names, key=lambda f: hashlib.sha1(f.encode('utf-8')).hexdigest())
+    n = max(1, round(len(ranked) * fraction))
+    return set(ranked[:n])
+
+
+def list_images(d):
+    d = Path(d)
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+
+
+def _symlink_files(paths, dest_dir):
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for p in paths:
+        link = dest_dir / p.name
+        if link.exists() or link.is_symlink():
+            continue
+        link.symlink_to(p.resolve())
+
+
 def assemble(data_root, out_dir, names, teacher=None, min_corrections=20, skip_gate=False):
     from PIL import Image
     store = data_root / 'corrections'
@@ -52,8 +219,8 @@ def assemble(data_root, out_dir, names, teacher=None, min_corrections=20, skip_g
     disagreements = sum(1 for r in rows if r['verdict'] != 'confirm')
     # "Looks right" alone is the model grading its own homework: only verdicts
     # that disagree with it carry information the fine-tune can learn from.
-    # When a Roboflow dataset is supplied there is external data to train on,
-    # so the local-corrections gate is informational only, not a hard stop.
+    # When external data is supplied there is data to train on regardless of
+    # the local count, so the local-corrections gate is informational only.
     if not skip_gate and (len(rows) < min_corrections or disagreements < max(1, min_corrections // 2)):
         sys.exit(f'{len(rows)} corrections recorded, {disagreements} of them disagreements (Not a … / It was actually …). '
                  f'Training needs at least {min_corrections} in total with {max(1, min_corrections // 2)} disagreements; '
@@ -93,16 +260,107 @@ def assemble(data_root, out_dir, names, teacher=None, min_corrections=20, skip_g
     return yaml, counts, len(rows)
 
 
+def _prepare_external_dataset(key, parsed, index_map, work_dir, teacher, print_prefix,
+                               person_class=None, child_class=None):
+    """Remap an external dataset's labels, add teacher pseudo-labels, and lay
+    out train/val image+label dirs (holding out 10% from train when the
+    dataset has no valid split of its own). Returns (train_dir, val_dir).
+    """
+    from PIL import Image
+    labelled_classes = set(index_map.values())
+    dataset_dir = work_dir / key
+    if dataset_dir.exists():
+        shutil.rmtree(dataset_dir)
+
+    def augment_split(image_paths, labels_src, split_name):
+        images_out, labels_out = dataset_dir / f'{split_name}_images', dataset_dir / f'{split_name}_labels'
+        images_out.mkdir(parents=True, exist_ok=True)
+        labels_out.mkdir(parents=True, exist_ok=True)
+        n_images = n_orig_boxes = n_teacher_boxes = 0
+        batch_paths = [str(p) for p in image_paths]
+        results = teacher.predict(batch_paths, conf=0.5, verbose=False, stream=True) if (teacher is not None and batch_paths) else iter(())
+        results_by_path = {}
+        if teacher is not None and batch_paths:
+            for p, r in zip(batch_paths, results):
+                results_by_path[p] = r
+        for img_path in image_paths:
+            link = images_out / img_path.name
+            if not (link.exists() or link.is_symlink()):
+                link.symlink_to(img_path.resolve())
+            n_images += 1
+            src_label = Path(labels_src) / (img_path.stem + '.txt')
+            existing_lines = []
+            if src_label.is_file():
+                remapped = []
+                for line in src_label.read_text().splitlines():
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    try:
+                        cls = int(parts[0])
+                    except ValueError:
+                        continue
+                    if cls not in index_map:
+                        continue
+                    parts[0] = str(index_map[cls])
+                    remapped.append(' '.join(parts))
+                existing_lines = remapped
+            n_orig_boxes += len(existing_lines)
+            teacher_boxes = []
+            result = results_by_path.get(str(img_path))
+            if result is not None:
+                for tb, tc, tconf in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist(), result.boxes.conf.tolist()):
+                    teacher_boxes.append((int(tc), tb, float(tconf)))
+            if teacher_boxes:
+                with Image.open(img_path) as im: width, height = im.size
+                lines = augment_labels(existing_lines, teacher_boxes, labelled_classes, width, height,
+                                        person_class=person_class, child_class=child_class)
+                n_teacher_boxes += len(lines) - len(existing_lines)
+            else:
+                lines = existing_lines
+            (labels_out / (img_path.stem + '.txt')).write_text('\n'.join(lines) + ('\n' if lines else ''))
+        print(f'{print_prefix} {split_name}: {n_images} images, {n_orig_boxes} original boxes, {n_teacher_boxes} teacher boxes added')
+        return images_out, labels_out
+
+    train_src_dir = parsed.get('train')
+    val_src_dir = parsed.get('val')
+    train_labels_src = Path(train_src_dir).parent / 'labels' if train_src_dir else None
+    val_labels_src = Path(val_src_dir).parent / 'labels' if val_src_dir else None
+
+    train_images = list_images(train_src_dir) if train_src_dir else []
+    val_images = list_images(val_src_dir) if val_src_dir else []
+
+    if val_images:
+        train_dir, _ = augment_split(train_images, train_labels_src, 'train')
+        val_dir, _ = augment_split(val_images, val_labels_src, 'val')
+        return train_dir, val_dir
+
+    # No valid split supplied: carve a deterministic 10% holdout from train.
+    holdout = holdout_filenames([p.name for p in train_images], fraction=0.10)
+    train_only = [p for p in train_images if p.name not in holdout]
+    val_only = [p for p in train_images if p.name in holdout]
+    train_dir, _ = augment_split(train_only, train_labels_src, 'train')
+    val_dir, _ = augment_split(val_only, train_labels_src, 'val (holdout)')
+    return train_dir, val_dir
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', required=True, help='ClearCam Data directory')
     parser.add_argument('--size', default='s', choices=['n', 's'])
-    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--epochs', type=int, default=None, help='default 20 with only local corrections, 15 when external datasets are used')
     parser.add_argument('--teacher', default='yolo11m.pt', help="'none' to skip teacher relabeling")
     parser.add_argument('--out', default=None)
     parser.add_argument('--min-corrections', type=int, default=20)
     parser.add_argument('--roboflow-version', type=int, default=None,
-                         help='Pull this Roboflow dataset version and merge it with the local corrections.')
+                         help='Shorthand for --roboflow-dataset using the configured project.')
+    parser.add_argument('--roboflow-dataset', action='append', default=[],
+                         help="Repeatable. 'project:version' or 'workspace/project:version'; "
+                              "workspace defaults to the configured one.")
+    parser.add_argument('--drop-classes', default='', help='Comma-separated class names to exclude entirely.')
+    parser.add_argument('--new-classes', default='stroller,child,scooter',
+                         help='Comma-separated class names (besides COCO) to keep, appended in this order. '
+                              'Any other name external datasets use is dropped.')
     args = parser.parse_args()
     from ultralytics import YOLO
     data_root = Path(args.data).expanduser()
@@ -111,89 +369,176 @@ def main():
     base = YOLO(f'yolo11{args.size}.pt')
     names = [base.names[i] for i in range(len(base.names))]
     teacher = None if args.teacher == 'none' else YOLO(args.teacher)
+    drop_classes = [c for c in (args.drop_classes or '').split(',') if c.strip()]
+    new_classes = [c for c in (args.new_classes or '').split(',') if c.strip()]
 
-    roboflow_train_dir = roboflow_val_dir = None
-    if args.roboflow_version is not None:
+    dataset_requests = []  # list of (workspace, project, version)
+    if args.roboflow_version is not None or args.roboflow_dataset:
         cfg = roboflow_sync.load_config(data_root)
-        missing = [k for k in ('api_key', 'workspace', 'project') if not cfg.get(k)]
+        missing = [k for k in ('api_key',) if not cfg.get(k)]
         if missing:
-            sys.exit(f'--roboflow-version needs Roboflow config: missing {", ".join(missing)} '
+            sys.exit(f'--roboflow-version/--roboflow-dataset need Roboflow config: missing {", ".join(missing)} '
                       f'(set it via {roboflow_sync.CONFIG_FILE} under {data_root}).')
-        roboflow_work = work / 'roboflow'
-        if roboflow_work.exists(): shutil.rmtree(roboflow_work)
-        data_yaml_path = roboflow_sync.download_dataset(cfg, args.roboflow_version, roboflow_work)
-        parsed = roboflow_sync.read_yaml_names(data_yaml_path)
-        merged_names = roboflow_sync.merge_class_names(names, parsed['names'])
-        new_names = [n for n in parsed['names'] if n not in names]
-        rf_index_map = {i: merged_names.index(n) for i, n in enumerate(parsed['names'])}
+        if args.roboflow_version is not None:
+            if not cfg.get('workspace') or not cfg.get('project'):
+                sys.exit('--roboflow-version needs a configured workspace and project '
+                         f'(set it via {roboflow_sync.CONFIG_FILE} under {data_root}).')
+            dataset_requests.append((cfg['workspace'], cfg['project'], args.roboflow_version))
+        for spec in args.roboflow_dataset:
+            try:
+                dataset_requests.append(parse_roboflow_spec(spec, cfg.get('workspace', '')))
+            except ValueError as err:
+                sys.exit(str(err))
 
-        for split, src in (('train', parsed['train']), ('val', parsed['val'])):
-            if not src or not Path(src).is_dir():
-                continue
-            labels_src = Path(src).parent / 'labels'
-            if not labels_src.is_dir():
-                continue
-            remapped_labels = roboflow_work / f'{split}_labels_remapped'
-            roboflow_sync.remap_yolo_labels(labels_src, remapped_labels, rf_index_map)
-            # Point a sibling 'labels' dir at the remapped labels, alongside the
-            # original images dir, matching Ultralytics' images/labels layout.
-            images_dst = roboflow_work / split / 'images'
-            images_dst.parent.mkdir(parents=True, exist_ok=True)
-            if images_dst.exists() or images_dst.is_symlink():
-                images_dst.unlink() if images_dst.is_symlink() else shutil.rmtree(images_dst)
-            images_dst.symlink_to(Path(src).resolve())
-            labels_dst = roboflow_work / split / 'labels'
-            if labels_dst.exists() or labels_dst.is_symlink():
-                labels_dst.unlink() if labels_dst.is_symlink() else shutil.rmtree(labels_dst)
-            labels_dst.symlink_to(remapped_labels.resolve())
-            if split == 'train':
-                roboflow_train_dir = images_dst
-            else:
-                roboflow_val_dir = images_dst
-        names = merged_names
-        print(f'roboflow dataset v{args.roboflow_version}: {len(parsed["names"])} classes, '
-              f'{len(new_names)} new to the merged set: {new_names}')
+    downloaded = []  # list of dicts: workspace, project, version, key, parsed
+    if dataset_requests:
+        rf_root = work / 'roboflow'
+        for workspace, project, version in dataset_requests:
+            key = f'{project}_v{version}'
+            dest_dir = rf_root / key
+            if dest_dir.exists(): shutil.rmtree(dest_dir)
+            cfg_i = dict(cfg)
+            cfg_i['workspace'], cfg_i['project'] = workspace, project
+            data_yaml_path = roboflow_sync.download_dataset(cfg_i, version, dest_dir)
+            parsed = roboflow_sync.read_yaml_names(data_yaml_path)
+            downloaded.append(dict(workspace=workspace, project=project, version=version, key=key, parsed=parsed))
+
+        # Fixed vocabulary: COCO + the configured new classes, always at the
+        # same indices. Anything an external dataset labels that isn't COCO
+        # or in --new-classes is dropped (see build_index_map_with_drops).
+        names = build_merged_names(names, new_classes)
+        base_class_count = len(base.names)
+
+    # Index maps are cheap to build, so compute them (and check the
+    # nothing-new gate) before doing any of the expensive per-image teacher
+    # pseudo-labeling work in _prepare_external_dataset.
+    index_maps = {}
+    new_names_used = set()
+    if downloaded:
+        for d in downloaded:
+            index_map = build_index_map_with_drops(d['parsed']['names'], names, drop_classes=drop_classes)
+            index_maps[d['key']] = index_map
+            new_names_used |= {i for i in index_map.values() if i >= base_class_count}
+        new_names = [names[i] for i in sorted(new_names_used)]
+
+    total_disagreements = None  # computed by assemble(); check the gate up front instead
+    if dataset_requests:
+        store = data_root / 'corrections'
+        rows = [json.loads(l) for l in (store / 'corrections.jsonl').read_text().splitlines() if l.strip()] if (store / 'corrections.jsonl').exists() else []
+        total_disagreements = sum(1 for r in rows if r['verdict'] != 'confirm')
+        if nothing_new_to_learn(new_names, total_disagreements):
+            sys.exit('Nothing new to learn: the datasets only contain classes the detector already knows '
+                      'and no corrections disagree with it.')
+
+    train_dirs, val_dirs = [], []
+    if downloaded:
+        rf_work = work / 'roboflow'
+        person_idx = names.index('person') if 'person' in names else None
+        child_idx = names.index('child') if 'child' in names else None
+        for d in downloaded:
+            train_dir, val_dir = _prepare_external_dataset(
+                d['key'], d['parsed'], index_maps[d['key']], rf_work, teacher, f"{d['project']} v{d['version']}",
+                person_class=person_idx, child_class=child_idx)
+            if train_dir is not None: train_dirs.append(train_dir)
+            if val_dir is not None: val_dirs.append(val_dir)
+        print(f'roboflow datasets: {len(downloaded)} merged, {len(new_names)} new classes actually used: {new_names}')
 
     yaml, counts, total = assemble(data_root, work / 'dataset', names, teacher, args.min_corrections,
-                                    skip_gate=roboflow_train_dir is not None)
+                                    skip_gate=bool(downloaded))
     print(f'dataset: {total} corrections -> {counts}')
     print(f'final class count: {len(names)}')
 
-    if roboflow_train_dir is not None:
+    external_present = bool(downloaded)
+    if external_present:
         local_images_dir = (work / 'dataset' / 'images').resolve()
-        val_dir = roboflow_val_dir if roboflow_val_dir is not None else local_images_dir
+        local_count = len(list_images(local_images_dir))
+        external_count = sum(len(list_images(d)) for d in train_dirs)
+        repeat = balance_repeat_factor(local_count, external_count)
+        print(f'balance: repeating {local_count} local images x{repeat} against {external_count} external train images')
+        train_list = [str(d.resolve()) for d in train_dirs] + [str(local_images_dir)] * repeat
+        val_list = [str(d.resolve()) for d in val_dirs] if val_dirs else [str(local_images_dir)]
         yaml.write_text(
             f"path: {work / 'dataset'}\n"
-            f"train:\n  - {local_images_dir}\n  - {roboflow_train_dir.resolve()}\n"
-            f"val: {val_dir}\n"
+            "train:\n" + ''.join(f"  - {p}\n" for p in train_list) +
+            "val:\n" + ''.join(f"  - {p}\n" for p in val_list) +
             "names:\n" + ''.join(f"  {i}: {n}\n" for i, n in enumerate(names))
         )
+
+    epochs = args.epochs if args.epochs is not None else (15 if external_present else 20)
     # Frozen backbone + small LR: adapt to these cameras, keep COCO knowledge.
-    base.train(data=str(yaml), epochs=args.epochs, imgsz=640, device='mps', freeze=10, lr0=0.001,
-               batch=8, project=str(work), name='run', exist_ok=True, verbose=False, plots=False)
+    # A bigger, more varied external-data mix gets a schedule suited to it:
+    # slightly higher LR, less mosaic tail, earlier stopping on plateau.
+    train_kwargs = dict(data=str(yaml), epochs=epochs, imgsz=640, device='mps', freeze=10,
+                         project=str(work), name='run', exist_ok=True, verbose=False, plots=False)
+    if external_present:
+        train_kwargs.update(lr0=0.002, close_mosaic=3, patience=5, cache='disk', batch=16, workers=4)
+    else:
+        train_kwargs.update(lr0=0.001, batch=8)
+    base.train(**train_kwargs)
     best = work / 'run' / 'weights' / 'best.pt'
     tuned = YOLO(str(best))
-    exported = Path(tuned.export(format='coreml', nms=True, imgsz=640))
-    # Into the app's data directory: the installed app looks there first, so
-    # the tuned model takes effect on its next launch with no rebuild.
+
     target = data_root / 'models' / f'yolo11{args.size}-home.mlpackage'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists(): shutil.rmtree(target)
-    shutil.move(str(exported), str(target))
-    # Report how many owner verdicts the tuned model now honours.
-    honoured = dict(stock=0, tuned=0, checked=0)
-    for row in [json.loads(l) for l in (data_root / 'corrections' / 'corrections.jsonl').read_text().splitlines() if l.strip()]:
-        src = data_root / 'corrections' / 'images' / row['image']
-        if not src.is_file() or row['verdict'] == 'confirm': continue
-        honoured['checked'] += 1
-        for key, model in (('stock', base), ('tuned', tuned)):
-            preds = model.predict(str(src), conf=0.5, verbose=False)[0]
-            labels = {names[int(c)] for c in preds.boxes.cls.tolist()}
-            trigger = next((d for d in row.get('detections', []) if d.get('trigger')), None)
-            if row['verdict'] == 'not_object' and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
-            if row['verdict'] == 'wrong_label' and row['label'] in labels and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
-    print(f'owner verdicts honoured: stock {honoured["stock"]}/{honoured["checked"]}, tuned {honoured["tuned"]}/{honoured["checked"]}')
-    print(f'exported {target}; quit and reopen ClearCam and it will use this model (Settings > Detection model stays on the same size).')
+    install_ok = True
+    if external_present and val_dirs:
+        # Safety gate: a tuned model that has forgotten COCO is worse than
+        # the stock one, even if it nails the new/local classes. Compare
+        # COCO-only mAP50-95 on the same combined val set.
+        combined_val_yaml = work / 'val_coco.yaml'
+        coco_names_in_merge = [n for n in names[:len(base.names)]]
+        combined_val_yaml.write_text(
+            "path: " + str(work) + "\n"
+            "train:\n  - " + str(val_dirs[0].resolve()) + "\n"
+            "val:\n" + ''.join(f"  - {p.resolve()}\n" for p in val_dirs) +
+            "names:\n" + ''.join(f"  {i}: {n}\n" for i, n in enumerate(names))
+        )
+        try:
+            stock_metrics = base.val(data=str(combined_val_yaml), imgsz=640, device='mps', verbose=False, plots=False)
+            tuned_metrics = tuned.val(data=str(combined_val_yaml), imgsz=640, device='mps', verbose=False, plots=False)
+            stock_maps = stock_metrics.box.maps
+            tuned_maps = tuned_metrics.box.maps
+            coco_idx = list(range(len(coco_names_in_merge)))
+            stock_coco_map = sum(stock_maps[i] for i in coco_idx if i < len(stock_maps)) / max(1, len(coco_idx))
+            tuned_coco_map = sum(tuned_maps[i] for i in coco_idx if i < len(tuned_maps)) / max(1, len(coco_idx))
+            if stock_coco_map > 0 and (stock_coco_map - tuned_coco_map) / stock_coco_map > 0.10:
+                install_ok = False
+                print(f'safety gate: tuned COCO mAP50-95 {tuned_coco_map:.4f} vs stock {stock_coco_map:.4f} '
+                      f'is a {(stock_coco_map - tuned_coco_map) / stock_coco_map:.1%} relative drop (>10%); not installing.')
+            else:
+                print(f'safety gate: tuned COCO mAP50-95 {tuned_coco_map:.4f} vs stock {stock_coco_map:.4f} - OK')
+            for cls_name in ('person', 'car', 'truck', 'bicycle', 'dog', 'stroller', 'child', 'scooter'):
+                if cls_name in names:
+                    idx = names.index(cls_name)
+                    val = tuned_maps[idx] if idx < len(tuned_maps) else None
+                    if val is not None:
+                        print(f'  per-class mAP50(-95) {cls_name}: {val:.4f}')
+        except Exception as err:  # noqa: BLE001 - a failed safety eval must not block reporting; it blocks install
+            install_ok = False
+            print(f'safety gate: could not evaluate ({err}); not installing.')
+
+    exported = Path(tuned.export(format='coreml', nms=True, imgsz=640))
+    if not install_ok:
+        print(f'tuned model left at {exported}; not installed into {target} (see safety gate message above).')
+    else:
+        # Into the app's data directory: the installed app looks there first, so
+        # the tuned model takes effect on its next launch with no rebuild.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists(): shutil.rmtree(target)
+        shutil.move(str(exported), str(target))
+        # Report how many owner verdicts the tuned model now honours.
+        honoured = dict(stock=0, tuned=0, checked=0)
+        for row in [json.loads(l) for l in (data_root / 'corrections' / 'corrections.jsonl').read_text().splitlines() if l.strip()]:
+            src = data_root / 'corrections' / 'images' / row['image']
+            if not src.is_file() or row['verdict'] == 'confirm': continue
+            honoured['checked'] += 1
+            for key, model in (('stock', base), ('tuned', tuned)):
+                preds = model.predict(str(src), conf=0.5, verbose=False)[0]
+                labels = {names[int(c)] for c in preds.boxes.cls.tolist()}
+                trigger = next((d for d in row.get('detections', []) if d.get('trigger')), None)
+                if row['verdict'] == 'not_object' and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
+                if row['verdict'] == 'wrong_label' and row['label'] in labels and (trigger is None or trigger['label'] not in labels): honoured[key] += 1
+        print(f'owner verdicts honoured: stock {honoured["stock"]}/{honoured["checked"]}, tuned {honoured["tuned"]}/{honoured["checked"]}')
+        print(f'exported {target}; quit and reopen ClearCam and it will use this model (Settings > Detection model stays on the same size).')
 
 
 if __name__ == '__main__':

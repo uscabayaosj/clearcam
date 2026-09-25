@@ -169,6 +169,8 @@
     .icon-button .icon svg { fill: none; }
     .icon-button.delete-button { color: var(--paper-dim); }
     .icon-button.delete-button:hover { background: var(--danger-well); color: var(--danger); }
+    .icon-button.detections-active { background: var(--ink-soft); color: var(--sage-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
+    .live-detections { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; background: #060a0b; }
     .camera-card .detection-toggle { display: none; }
     .multi-view-wrapper { display: none; }
 
@@ -1640,6 +1642,11 @@
 
       previousCameras.forEach(cameraName => {
         if (!cams.includes(cameraName)) {
+          // The card may already be detached (innerHTML was rebuilt above), so
+          // clear its MJPEG <img> directly from the reference we held onto —
+          // an open live-detections stream must not outlive its card.
+          const oldImg = existingCards.get(cameraName)?.querySelector('.live-detections');
+          if (oldImg) oldImg.removeAttribute('src');
           cleanupCameraStream(cameraName);
         }
       });
@@ -1679,6 +1686,16 @@
           <span class="camera-name"></span>
           <div class="camera-actions">
             <div class="button-group">
+              <button class="icon-button detections-toggle" type="button" title="Live detections" aria-label="Show detections" aria-pressed="false">
+                <span class="icon">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M4 9V5a1 1 0 0 1 1-1h4"/>
+                    <path d="M20 9V5a1 1 0 0 1-1-1h-4"/>
+                    <path d="M4 15v4a1 1 0 0 0 1 1h4"/>
+                    <path d="M20 15v4a1 1 0 0 0-1 1h-4"/>
+                  </svg>
+                </span>
+              </button>
               <button class="icon-button" type="button" title="Settings" aria-label="Camera settings">
                 <span class="icon">
                   <svg><use href="#icon-cog"></use></svg>
@@ -1701,8 +1718,9 @@
       card.querySelector('video').id = videoId;
       card.querySelector('.video-placeholder').id = placeholderId;
       card.querySelector('.camera-name').textContent = camName;
+      card.querySelector('.detections-toggle').addEventListener('click', () => toggleLiveDetections(camName));
       [openSettingsEditor, openAlertsModal, deleteCamera].forEach((action, index) => {
-        card.querySelectorAll('.icon-button')[index].addEventListener('click', () => action(camName));
+        card.querySelectorAll('.icon-button:not(.detections-toggle)')[index].addEventListener('click', () => action(camName));
       });
       card.addEventListener('click', (event) => {
         if (event.target.closest('button, video')) return;
@@ -2072,14 +2090,15 @@
 
       // State before decoration: the well says whether it is the live edge or a replay.
       const well = video.closest('.video-container');
+      const live = playlistName === 'live.m3u8';
       if (well) {
         let badge = well.querySelector('.stream-badge');
         if (!badge) { badge = document.createElement('span'); badge.className = 'stream-badge'; well.appendChild(badge); }
-        const live = playlistName === 'live.m3u8';
-        badge.textContent = live ? 'LIVE' : 'REPLAY';
         badge.classList.toggle('stream-badge-live', live);
+        well.dataset.live = String(live);
       }
-      
+      syncLiveDetectionsToggle(camName, live);
+
       const session = {
         video: video,
         hls: null,
@@ -2116,6 +2135,8 @@
           hls.on(Hls.Events.MANIFEST_PARSED, function () {
             if (activeVideoStreams.get(camName) !== session) return;
             applyPendingReplay(camName);
+            // Detection view came up before the player: stay parked under it.
+            if (session.pausedForDetections) { hls.stopLoad(); return; }
             video.play().catch(e => console.log('Auto-play prevented:', e));
             activeVideoStreams.get(camName).isPlaying = true;
           });
@@ -2148,6 +2169,8 @@
             video.removeEventListener('loadedmetadata', onMeta);
             if (activeVideoStreams.get(camName) !== session) return;
             applyPendingReplay(camName);
+            // Detection view came up before the player: stay parked under it.
+            if (session.pausedForDetections) { hls.stopLoad(); return; }
             video.play().catch(e => console.log('Auto-play prevented:', e));
             activeVideoStreams.get(camName).isPlaying = true;
           });
@@ -2201,7 +2224,148 @@
         activeVideoStreams.delete(camName);
       }
       stopDetectionHeartbeat(camName);
+      removeLiveDetectionsImg(camName);
     }
+
+    // --- Live detections (MJPEG overlay) ---------------------------------
+    // Each open <img> holds an engine thread and a JPEG encoder open, so the
+    // src is cleared/removed aggressively: on toggle-off, on replay, when the
+    // tab is hidden, and when a camera card goes away.
+    function findCameraCard(camName) {
+      return document.querySelector(`.camera-card[data-camera="${CSS.escape(camName)}"]`);
+    }
+
+    function loadDetectionPrefs() {
+      try { return JSON.parse(localStorage.getItem('clearcam.liveDetections')) || {}; }
+      catch (_) { return {}; }
+    }
+
+    function saveDetectionPref(camName, enabled) {
+      try {
+        const prefs = loadDetectionPrefs();
+        prefs[camName] = enabled;
+        localStorage.setItem('clearcam.liveDetections', JSON.stringify(prefs));
+      } catch (_) { /* localStorage unavailable; preference just won't persist */ }
+    }
+
+    function detectionPreferredOn(camName) {
+      const prefs = loadDetectionPrefs();
+      return camName in prefs ? !!prefs[camName] : true; // default ON for today's live stream
+    }
+
+    function removeLiveDetectionsImg(camName) {
+      const img = findCameraCard(camName)?.querySelector('.live-detections');
+      if (img) { img.removeAttribute('src'); img.remove(); }
+      updateDetectionBadge(camName);
+    }
+
+    function onLiveDetectionsError(camName) {
+      const btn = findCameraCard(camName)?.querySelector('.detections-toggle');
+      if (btn && btn.dataset.errored === '1') return; // announce once
+      if (btn) btn.dataset.errored = '1';
+      setLiveDetectionsView(camName, false); // session-only: don't persist the preference
+      announce(`Live detections are unavailable for ${camName}; showing the recording stream.`, true);
+    }
+
+    function setLiveDetectionsView(camName, on) {
+      const card = findCameraCard(camName);
+      if (!card) return;
+      const container = card.querySelector('.video-container');
+      const btn = card.querySelector('.detections-toggle');
+      let img = container?.querySelector('.live-detections');
+      if (on && container) {
+        if (!img) {
+          img = document.createElement('img');
+          img.className = 'live-detections';
+          img.alt = `Live view of ${camName} with detections`;
+          img.addEventListener('error', () => onLiveDetectionsError(camName));
+          const video = container.querySelector('video');
+          if (video) video.insertAdjacentElement('afterend', img); else container.appendChild(img);
+        }
+        img.src = `/live_view?cam=${encodeURIComponent(camName)}`;
+      } else if (img) {
+        img.removeAttribute('src');
+        img.remove();
+      }
+      pauseHiddenVideo(camName, !!on && !!container);
+      if (btn) {
+        btn.setAttribute('aria-pressed', String(!!on));
+        btn.classList.toggle('detections-active', !!on);
+      }
+      updateDetectionBadge(camName);
+    }
+
+    // The detection view covers the video, so stop the video's own downloading
+    // while it is up. Browsers (WebKit included) allow about six connections
+    // per server; three detection streams plus three live players exhaust them
+    // and ordinary requests like the camera list start failing.
+    function pauseHiddenVideo(camName, paused) {
+      const session = activeVideoStreams.get(camName);
+      if (!session) return;
+      try {
+        if (paused) {
+          session.pausedForDetections = true;
+          session.hls?.stopLoad();
+          session.video?.pause();
+        } else if (session.pausedForDetections) {
+          session.pausedForDetections = false;
+          session.hls?.startLoad(-1);
+          session.video?.play().catch(() => {});
+        }
+      } catch (_) { /* player torn down meanwhile */ }
+    }
+
+    function updateDetectionBadge(camName) {
+      const well = findCameraCard(camName)?.querySelector('.video-container');
+      const badge = well?.querySelector('.stream-badge');
+      if (!badge || !well) return;
+      const live = well.dataset.live === 'true';
+      const detecting = !!well.querySelector('.live-detections');
+      badge.textContent = live ? (detecting ? 'LIVE · AI' : 'LIVE') : 'REPLAY';
+    }
+
+    // Called whenever a stream (re)starts: enables/disables the toggle for
+    // today's live edge vs. a replay, and applies the saved per-camera preference.
+    function syncLiveDetectionsToggle(camName, live) {
+      const btn = findCameraCard(camName)?.querySelector('.detections-toggle');
+      if (!btn) return;
+      if (!live) {
+        btn.disabled = true;
+        btn.title = 'Detections are shown on the live stream';
+        setLiveDetectionsView(camName, false);
+        return;
+      }
+      btn.disabled = false;
+      btn.title = 'Live detections';
+      delete btn.dataset.errored;
+      setLiveDetectionsView(camName, detectionPreferredOn(camName) && !document.hidden);
+    }
+
+    function toggleLiveDetections(camName) {
+      const btn = findCameraCard(camName)?.querySelector('.detections-toggle');
+      if (!btn || btn.disabled) return;
+      const turningOn = btn.getAttribute('aria-pressed') !== 'true';
+      delete btn.dataset.errored;
+      saveDetectionPref(camName, turningOn);
+      setLiveDetectionsView(camName, turningOn);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      document.querySelectorAll('.camera-card').forEach(card => {
+        const camName = card.dataset.camera;
+        const btn = card.querySelector('.detections-toggle');
+        if (!camName || !btn || btn.disabled) return;
+        const img = card.querySelector('.live-detections');
+        if (document.hidden) {
+          if (img) img.removeAttribute('src');
+        } else if (!btn.dataset.errored && detectionPreferredOn(camName)) {
+          // Apply the preference, not the last pressed state: a page that
+          // loaded while hidden (app opened behind another window) never
+          // turned detections on in the first place.
+          setLiveDetectionsView(camName, true);
+        }
+      });
+    });
 
     async function deleteCamera(cam) {
       if (!(await askConfirm({
