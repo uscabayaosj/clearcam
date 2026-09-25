@@ -260,88 +260,91 @@ def assemble(data_root, out_dir, names, teacher=None, min_corrections=20, skip_g
     return yaml, counts, len(rows)
 
 
-def _prepare_external_dataset(key, parsed, index_map, work_dir, teacher, print_prefix,
-                               person_class=None, child_class=None):
-    """Remap an external dataset's labels, add teacher pseudo-labels, and lay
-    out train/val image+label dirs (holding out 10% from train when the
-    dataset has no valid split of its own). Returns (train_dir, val_dir).
+def export_split_dirs(data_yaml_path):
+    """(train_images_dir, val_images_dir or None) inside a Roboflow export.
+
+    Located on disk rather than trusted from data.yaml: Roboflow writes paths
+    like '../train/images' that are one directory off from the yaml itself.
     """
-    from PIL import Image
+    root = Path(data_yaml_path).parent
+    def first(*names):
+        for name in names:
+            d = root / name / 'images'
+            if d.is_dir() and list_images(d): return d
+        return None
+    return first('train'), first('valid', 'val')
+
+
+def _prepare_external_dataset(key, data_yaml_path, index_map, out_root, teacher, print_prefix,
+                              person_class=None, child_class=None):
+    """Remap an external dataset's labels into the merged vocabulary, add
+    teacher pseudo-labels for COCO classes it leaves unlabelled, and lay it out
+    as out_root/key/{train,val}/{images,labels} — the images/labels sibling
+    layout the trainer needs to pair each image with its label file.
+
+    Never writes inside the download (out_root must be elsewhere), and handles
+    teacher results one image at a time: holding them all would keep every
+    decoded frame of a 10k-image dataset in memory.
+    """
     labelled_classes = set(index_map.values())
-    dataset_dir = work_dir / key
+    dataset_dir = Path(out_root) / key
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
 
-    def augment_split(image_paths, labels_src, split_name):
-        images_out, labels_out = dataset_dir / f'{split_name}_images', dataset_dir / f'{split_name}_labels'
+    def remap(label_file):
+        if not label_file.is_file(): return []
+        out = []
+        for line in label_file.read_text().splitlines():
+            parts = line.split()
+            if len(parts) < 5: continue
+            try: cls = int(parts[0])
+            except ValueError: continue
+            if cls not in index_map: continue
+            parts[0] = str(index_map[cls])
+            out.append(' '.join(parts[:5]))
+        return out
+
+    def augment_split(image_paths, split_name):
+        images_out = dataset_dir / split_name / 'images'
+        labels_out = dataset_dir / split_name / 'labels'
         images_out.mkdir(parents=True, exist_ok=True)
         labels_out.mkdir(parents=True, exist_ok=True)
-        n_images = n_orig_boxes = n_teacher_boxes = 0
-        batch_paths = [str(p) for p in image_paths]
-        results = teacher.predict(batch_paths, conf=0.5, verbose=False, stream=True) if (teacher is not None and batch_paths) else iter(())
-        results_by_path = {}
-        if teacher is not None and batch_paths:
-            for p, r in zip(batch_paths, results):
-                results_by_path[p] = r
+        n_images = n_orig = n_teacher = 0
+        predictions = (teacher.predict([str(x) for x in image_paths], conf=0.5, verbose=False, stream=True)
+                       if teacher is not None and image_paths else iter(()))
         for img_path in image_paths:
+            result = next(predictions, None) if teacher is not None else None
             link = images_out / img_path.name
-            if not (link.exists() or link.is_symlink()):
-                link.symlink_to(img_path.resolve())
+            if not link.exists(): link.symlink_to(img_path.resolve())
             n_images += 1
-            src_label = Path(labels_src) / (img_path.stem + '.txt')
-            existing_lines = []
-            if src_label.is_file():
-                remapped = []
-                for line in src_label.read_text().splitlines():
-                    parts = line.split()
-                    if not parts:
-                        continue
-                    try:
-                        cls = int(parts[0])
-                    except ValueError:
-                        continue
-                    if cls not in index_map:
-                        continue
-                    parts[0] = str(index_map[cls])
-                    remapped.append(' '.join(parts))
-                existing_lines = remapped
-            n_orig_boxes += len(existing_lines)
-            teacher_boxes = []
-            result = results_by_path.get(str(img_path))
-            if result is not None:
-                for tb, tc, tconf in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist(), result.boxes.conf.tolist()):
-                    teacher_boxes.append((int(tc), tb, float(tconf)))
-            if teacher_boxes:
-                with Image.open(img_path) as im: width, height = im.size
-                lines = augment_labels(existing_lines, teacher_boxes, labelled_classes, width, height,
-                                        person_class=person_class, child_class=child_class)
-                n_teacher_boxes += len(lines) - len(existing_lines)
-            else:
-                lines = existing_lines
+            existing = remap(img_path.parent.parent / 'labels' / (img_path.stem + '.txt'))
+            n_orig += len(existing)
+            lines = existing
+            if result is not None and len(result.boxes):
+                height, width = result.orig_shape[:2]
+                teacher_boxes = [(int(c), b, float(f)) for b, c, f in zip(
+                    result.boxes.xyxy.tolist(), result.boxes.cls.tolist(), result.boxes.conf.tolist())]
+                lines = augment_labels(existing, teacher_boxes, labelled_classes, width, height,
+                                       person_class=person_class, child_class=child_class)
+                n_teacher += len(lines) - len(existing)
             (labels_out / (img_path.stem + '.txt')).write_text('\n'.join(lines) + ('\n' if lines else ''))
-        print(f'{print_prefix} {split_name}: {n_images} images, {n_orig_boxes} original boxes, {n_teacher_boxes} teacher boxes added')
-        return images_out, labels_out
+            if n_images % 1000 == 0:
+                print(f'{print_prefix} {split_name}: {n_images}/{len(image_paths)} prepared', flush=True)
+        print(f'{print_prefix} {split_name}: {n_images} images, {n_orig} original boxes, {n_teacher} teacher boxes added', flush=True)
+        return images_out if n_images else None
 
-    train_src_dir = parsed.get('train')
-    val_src_dir = parsed.get('val')
-    train_labels_src = Path(train_src_dir).parent / 'labels' if train_src_dir else None
-    val_labels_src = Path(val_src_dir).parent / 'labels' if val_src_dir else None
-
-    train_images = list_images(train_src_dir) if train_src_dir else []
-    val_images = list_images(val_src_dir) if val_src_dir else []
-
-    if val_images:
-        train_dir, _ = augment_split(train_images, train_labels_src, 'train')
-        val_dir, _ = augment_split(val_images, val_labels_src, 'val')
-        return train_dir, val_dir
-
-    # No valid split supplied: carve a deterministic 10% holdout from train.
-    holdout = holdout_filenames([p.name for p in train_images], fraction=0.10)
-    train_only = [p for p in train_images if p.name not in holdout]
-    val_only = [p for p in train_images if p.name in holdout]
-    train_dir, _ = augment_split(train_only, train_labels_src, 'train')
-    val_dir, _ = augment_split(val_only, train_labels_src, 'val (holdout)')
-    return train_dir, val_dir
+    train_src, val_src = export_split_dirs(data_yaml_path)
+    train_images = list_images(train_src) if train_src else []
+    if val_src:
+        val_images = list_images(val_src)
+    else:
+        # No valid split supplied: carve a deterministic 10% holdout from train.
+        holdout = holdout_filenames([x.name for x in train_images], fraction=0.10)
+        val_images = [x for x in train_images if x.name in holdout]
+        train_images = [x for x in train_images if x.name not in holdout]
+    if not train_images:
+        print(f'{print_prefix}: no training images found in the export', flush=True)
+    return augment_split(train_images, 'train'), augment_split(val_images, 'val')
 
 
 def main():
@@ -401,7 +404,8 @@ def main():
             cfg_i['workspace'], cfg_i['project'] = workspace, project
             data_yaml_path = roboflow_sync.download_dataset(cfg_i, version, dest_dir)
             parsed = roboflow_sync.read_yaml_names(data_yaml_path)
-            downloaded.append(dict(workspace=workspace, project=project, version=version, key=key, parsed=parsed))
+            downloaded.append(dict(workspace=workspace, project=project, version=version, key=key, parsed=parsed,
+                                   data_yaml=data_yaml_path))
 
         # Fixed vocabulary: COCO + the configured new classes, always at the
         # same indices. Anything an external dataset labels that isn't COCO
@@ -432,12 +436,12 @@ def main():
 
     train_dirs, val_dirs = [], []
     if downloaded:
-        rf_work = work / 'roboflow'
+        rf_work = work / 'external'   # never inside work/'roboflow', where the downloads live
         person_idx = names.index('person') if 'person' in names else None
         child_idx = names.index('child') if 'child' in names else None
         for d in downloaded:
             train_dir, val_dir = _prepare_external_dataset(
-                d['key'], d['parsed'], index_maps[d['key']], rf_work, teacher, f"{d['project']} v{d['version']}",
+                d['key'], d['data_yaml'], index_maps[d['key']], rf_work, teacher, f"{d['project']} v{d['version']}",
                 person_class=person_idx, child_class=child_idx)
             if train_dir is not None: train_dirs.append(train_dir)
             if val_dir is not None: val_dirs.append(val_dir)
