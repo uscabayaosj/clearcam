@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download a Roboflow-trained detector and convert it for the Neural Engine.
 #   bash script/roboflow_model.sh 3                       # install version 3 into the 's' slot
-#   bash script/roboflow_model.sh 3 --size n              # install into the 'n' slot
+#   bash script/roboflow_model.sh 3 --size t              # install into the nano ('t') slot
 #   bash script/roboflow_model.sh 3 --project P --workspace W
 #   bash script/roboflow_model.sh --rollback               # undo the last install
 set -euo pipefail

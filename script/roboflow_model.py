@@ -38,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from utils import roboflow_sync
-from detection.coreml_yolo import build_canonical
+from detection.coreml_yolo import build_canonical, MODEL_FILES
 
 COCO = [l.strip() for l in (ROOT / 'models' / 'coco.names').read_text().splitlines() if l.strip()]
 
@@ -55,9 +55,12 @@ def _models_dir(data_root):
 
 def _package_paths(data_root, size):
     models_dir = _models_dir(data_root)
-    target = models_dir / f'yolo11{size}-home.mlpackage'
-    previous = models_dir / f'yolo11{size}-home.previous.mlpackage'
-    meta = models_dir / f'yolo11{size}-home.json'
+    # Same file name the engine looks for (detection.coreml_yolo.resolve_package):
+    # size 't' is yolo11n, so a tuned nano model is yolo11n-home.mlpackage.
+    stem = MODEL_FILES[size].replace('.mlpackage', '-home')
+    target = models_dir / f'{stem}.mlpackage'
+    previous = models_dir / f'{stem}.previous.mlpackage'
+    meta = models_dir / f'{stem}.json'
     return target, previous, meta
 
 

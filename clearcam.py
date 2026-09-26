@@ -476,6 +476,10 @@ class VideoCapture:
     self.object_set_zone[cam_name] = set()
     self.running[cam_name] = True
     self.output_dir_raw[cam_name] = BASE_DIR / "cameras" / f'{cam_name}' / "streams"
+    # frame_loop runs only while this folder exists (deleting a camera removes
+    # it). In live-only mode nothing else creates it, so a camera added then
+    # would never be read; the folder stays empty.
+    (BASE_DIR / "cameras" / cam_name).mkdir(parents=True, exist_ok=True)
     self.last_preds[cam_name] = []
     self.raw_frame[cam_name] = None
     self.width[cam_name], self.height[cam_name] = detection_size(*_get_stream_resolution(src))

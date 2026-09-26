@@ -96,7 +96,7 @@ weights and converts them to Core ML for the Neural Engine.
    bash script/roboflow_model.sh <version>
    ```
    This downloads the weights, converts them to Core ML, and installs them
-   for the app to pick up next launch. Pass `--size n`/`--size s`/`--size m`
+   for the app to pick up next launch. Pass `--size t` (nano)/`--size s`/`--size m`
    to choose the detector slot, or `--project`/`--workspace` to override the
    configured project.
 4. To undo the last install: `bash script/roboflow_model.sh --rollback`.
