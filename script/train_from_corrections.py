@@ -308,16 +308,8 @@ def _prepare_external_dataset(key, data_yaml_path, index_map, out_root, teacher,
 
     def remap(label_file):
         if not label_file.is_file(): return []
-        out = []
-        for line in label_file.read_text().splitlines():
-            parts = line.split()
-            if len(parts) < 5: continue
-            try: cls = int(parts[0])
-            except ValueError: continue
-            if cls not in index_map: continue
-            parts[0] = str(index_map[cls])
-            out.append(' '.join(parts[:5]))
-        return out
+        boxes = (roboflow_sync.yolo_box_line(line, index_map) for line in label_file.read_text().splitlines())
+        return [b for b in boxes if b is not None]
 
     def augment_split(image_paths, split_name):
         images_out = dataset_dir / split_name / 'images'

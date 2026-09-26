@@ -332,6 +332,13 @@ def voc_xml_from_yolo_lines(lines, class_names, filename, width, height):
         y1 = (cy - h / 2) * height
         x2 = (cx + w / 2) * width
         y2 = (cy + h / 2) * height
+        # Some public exports have boxes that spill past the frame; Roboflow
+        # rejects those ('annotation:outside'), so trim to the image and drop
+        # anything that trims away to (nearly) nothing.
+        x1, x2 = max(0.0, min(x1, width)), max(0.0, min(x2, width))
+        y1, y2 = max(0.0, min(y1, height)), max(0.0, min(y2, height))
+        if x2 - x1 < 2 or y2 - y1 < 2:
+            continue
         name = class_names[cls]
         objects += (
             '  <object>\n'
@@ -645,6 +652,44 @@ def build_index_map(src_names, merged_names):
     return out
 
 
+def yolo_box_line(line, index_map=None):
+    """One YOLO label line as a detection box 'cls cx cy w h', or None.
+
+    Roboflow's YOLO exports mix plain boxes (cls cx cy w h) with polygon
+    outlines (cls x1 y1 x2 y2 ... xn yn) from segmentation-labelled images.
+    Reading a polygon's first four numbers as a box yields garbage, so a
+    polygon becomes the box that encloses its points. index_map (source
+    index -> target index), when given, remaps the class and drops
+    unmapped ones.
+    """
+    parts = (line or '').split()
+    if len(parts) < 5:
+        return None
+    try:
+        cls = int(parts[0])
+        values = [float(v) for v in parts[1:]]
+    except ValueError:
+        return None
+    if index_map is not None:
+        if cls not in index_map:
+            return None
+        cls = index_map[cls]
+    if len(values) == 4:
+        if values[2] <= 0 or values[3] <= 0:
+            return None
+        return ' '.join([str(cls)] + parts[1:5])   # a plain box passes through as written
+    elif len(values) >= 6 and len(values) % 2 == 0:
+        xs, ys = values[0::2], values[1::2]
+        x1, x2 = max(0.0, min(xs)), min(1.0, max(xs))
+        y1, y2 = max(0.0, min(ys)), min(1.0, max(ys))
+        cx, cy, w, h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
+    else:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return f'{cls} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}'
+
+
 def remap_yolo_labels(labels_dir, out_dir, index_map):
     labels_dir = Path(labels_dir)
     out_dir = Path(out_dir)
@@ -653,17 +698,9 @@ def remap_yolo_labels(labels_dir, out_dir, index_map):
     for txt in labels_dir.glob('*.txt'):
         lines_out = []
         for line in txt.read_text().splitlines():
-            parts = line.split()
-            if not parts:
-                continue
-            try:
-                cls = int(parts[0])
-            except ValueError:
-                continue
-            if cls not in index_map:
-                continue
-            parts[0] = str(index_map[cls])
-            lines_out.append(' '.join(parts))
+            box = yolo_box_line(line, index_map)
+            if box is not None:
+                lines_out.append(box)
         target = out_dir / txt.name
         target.write_text('\n'.join(lines_out) + ('\n' if lines_out else ''))
         count += 1

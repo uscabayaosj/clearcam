@@ -196,20 +196,8 @@ def build_teacher_index_map(teacher_names):
 
 
 def remap_lines(label_text, index_map):
-    out = []
-    for line in (label_text or '').splitlines():
-        parts = line.split()
-        if len(parts) < 5:
-            continue
-        try:
-            cls = int(parts[0])
-        except ValueError:
-            continue
-        if cls not in index_map:
-            continue
-        parts[0] = str(index_map[cls])
-        out.append(' '.join(parts[:5]))
-    return out
+    boxes = (roboflow_sync.yolo_box_line(line, index_map) for line in (label_text or '').splitlines())
+    return [b for b in boxes if b is not None]
 
 
 # --------------------------------------------------------------------- ledger

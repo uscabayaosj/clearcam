@@ -329,3 +329,20 @@ class NoSecretsPrintedTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_voc_xml_trims_boxes_to_the_image():
+    from utils import roboflow_sync
+    xml = roboflow_sync.voc_xml_from_yolo_lines(
+        ['0 0.95 0.5 0.3 0.4', '0 1.5 0.5 0.2 0.2'], ['person'], 'x.jpg', 100, 100)
+    assert '<xmax>100</xmax>' in xml
+    assert xml.count('<object>') == 1   # the box wholly outside is dropped
+
+
+def test_polygon_label_lines_become_enclosing_boxes():
+    from utils import roboflow_sync
+    poly = '0 0.2 0.5 0.4 0.5 0.4 0.9 0.2 0.9'
+    assert roboflow_sync.yolo_box_line(poly, {0: 7}) == '7 0.300000 0.700000 0.200000 0.400000'
+    assert roboflow_sync.yolo_box_line('0 0.5 0.5 0.2 0.2') == '0 0.5 0.5 0.2 0.2'
+    assert roboflow_sync.yolo_box_line('3 0.5 0.5 0.2 0.2', {0: 1}) is None
+    assert roboflow_sync.yolo_box_line('0 0.1 0.2 0.3') is None
