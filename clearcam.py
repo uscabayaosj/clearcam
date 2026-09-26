@@ -572,8 +572,40 @@ class VideoCapture:
     with self.restart_lock:
       if self.stopping.is_set(): return self.hls_proc.get(cam_name), self.proc.get(cam_name)
       result = self._open_ffmpeg_locked(cam_name)
-      if result is not None: self.hls_proc[cam_name], self.proc[cam_name] = result
+      if result is not None:
+        self.hls_proc[cam_name], self.proc[cam_name] = result
+        # The stall watchdog measures from here until a first frame arrives.
+        pipeline = getattr(self, 'pipeline', {})
+        if cam_name in pipeline: pipeline[cam_name]['stream_started'] = time.time()
       return result
+
+  def decoder_stalled(self, cam_name, now=None, limit=30):
+    """True when a live decoder has produced nothing for `limit` seconds.
+
+    Measured from its latest frame or, before a first frame, from when the
+    stream was opened: a decoder can connect and then hang before its first
+    frame, and that camera would otherwise stay blank until relaunch.
+    Rate-limited to one kick per `limit` seconds so restart backoff holds.
+    """
+    now = time.time() if now is None else now
+    decoder = self.proc.get(cam_name)
+    if decoder is None or decoder.poll() is not None: return False
+    state = self.pipeline.get(cam_name) or {}
+    marks = [t for t in (state.get('last_frame'), state.get('stream_started')) if t]
+    if not marks or now - max(marks) <= limit: return False
+    if now - getattr(self, 'last_decoder_kick', {}).get(cam_name, 0) <= limit: return False
+    return True
+
+  def kick_stalled_decoder(self, cam_name):
+    """Kill a stalled decoder so frame_loop's EOF triggers the normal restart."""
+    if not self.decoder_stalled(cam_name): return False
+    state = self.pipeline.get(cam_name) or {}
+    since = state.get('last_frame') or state.get('stream_started')
+    print(f"{cam_name} decoder stalled for {int(time.time() - since)}s; restarting stream")
+    if not hasattr(self, 'last_decoder_kick'): self.last_decoder_kick = {}
+    self.last_decoder_kick[cam_name] = time.time()
+    self._safe_kill_process(self.proc.get(cam_name))
+    return True
 
   def _open_ffmpeg_locked(self, cam_name):
     if cam_name in self.proc: self._safe_kill_process(self.proc[cam_name])
@@ -794,7 +826,9 @@ class VideoCapture:
       else:
         frame_num = self.frame_num[cam_name]
         last_frame_num = self.last_frame_num[cam_name]
-        if self.raw_frame[cam_name] is None: return
+        if self.raw_frame[cam_name] is None:
+          self.kick_stalled_decoder(cam_name)   # hung before its first frame
+          return
         # Tracking does not need every decoded frame: capping inference at
         # DETECT_FPS cuts detection CPU by roughly the same ratio at no
         # accuracy cost, since events are counted over seconds, not frames.
@@ -805,17 +839,8 @@ class VideoCapture:
         frame = self.raw_frame[cam_name].copy()
         if frame_num == last_frame_num:
           # Watchdog: a decoder can stay alive but stop producing frames (its
-          # blocking read never returns a short read). Kill it so frame_loop's
-          # EOF triggers the normal stream restart.
-          stale_since = self.pipeline[cam_name].get('last_frame')
-          decoder = self.proc.get(cam_name)
-          last_kick = getattr(self, 'last_decoder_kick', {}).get(cam_name, 0)
-          if (stale_since and time.time() - stale_since > 30 and time.time() - last_kick > 30
-              and decoder is not None and decoder.poll() is None):
-            print(f"{cam_name} decoder stalled for {int(time.time() - stale_since)}s; restarting stream")
-            if not hasattr(self, 'last_decoder_kick'): self.last_decoder_kick = {}
-            self.last_decoder_kick[cam_name] = time.time()
-            self._safe_kill_process(decoder)
+          # blocking read never returns a short read).
+          self.kick_stalled_decoder(cam_name)
           return
 
         # Detection runs at DETECT_FPS regardless of whether an alert rule is

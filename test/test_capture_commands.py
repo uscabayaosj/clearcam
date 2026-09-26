@@ -64,3 +64,48 @@ class CaptureCommandTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _watchdog_methods(clock):
+    source = ast.parse((Path(__file__).parents[1] / 'clearcam.py').read_text())
+    cls = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'VideoCapture')
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ('decoder_stalled', 'kick_stalled_decoder')]
+    namespace = {'time': SimpleNamespace(time=clock)}
+    exec(compile(ast.Module(body=methods, type_ignores=[]), '<watchdog>', 'exec'), namespace)
+    return namespace
+
+
+class DecoderWatchdogTests(unittest.TestCase):
+    def camera(self, **state):
+        alive = SimpleNamespace(poll=lambda: None)
+        return SimpleNamespace(proc={'cam': alive}, pipeline={'cam': {**dict(last_frame=None, stream_started=None), **state}},
+                               _safe_kill_process=Mock())
+
+    def test_hang_before_first_frame_is_restarted(self):
+        ns = _watchdog_methods(lambda: 200)
+        cam = self.camera(stream_started=100)
+        cam.decoder_stalled = lambda name, now=None, limit=30: ns['decoder_stalled'](cam, name, now, limit)
+        self.assertTrue(ns['kick_stalled_decoder'](cam, 'cam'))
+        cam._safe_kill_process.assert_called_once()
+
+    def test_fresh_stream_is_left_alone(self):
+        ns = _watchdog_methods(lambda: 110)
+        cam = self.camera(stream_started=100)
+        self.assertFalse(ns['decoder_stalled'](cam, 'cam', 110))
+
+    def test_recent_frame_wins_over_old_stream_start(self):
+        ns = _watchdog_methods(lambda: 200)
+        cam = self.camera(stream_started=100, last_frame=190)
+        self.assertFalse(ns['decoder_stalled'](cam, 'cam', 200))
+
+    def test_kicks_are_rate_limited(self):
+        ns = _watchdog_methods(lambda: 200)
+        cam = self.camera(stream_started=100)
+        cam.last_decoder_kick = {'cam': 185}
+        self.assertFalse(ns['decoder_stalled'](cam, 'cam', 200))
+
+    def test_dead_decoder_is_left_to_frame_loop(self):
+        ns = _watchdog_methods(lambda: 200)
+        cam = self.camera(stream_started=100)
+        cam.proc['cam'] = SimpleNamespace(poll=lambda: 1)
+        self.assertFalse(ns['decoder_stalled'](cam, 'cam', 200))
