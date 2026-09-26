@@ -21,8 +21,14 @@ def make_detector(model_size, model_res):
 
 
 def apply_model_class_names(model, class_labels, color_dict):
-  """A fine-tuned -home model can add classes (e.g. 'package'); mirror its names everywhere."""
-  names = getattr(model, 'names', None)
+  """A fine-tuned -home model can add classes (e.g. 'package'); mirror its names everywhere.
+
+  Prefers model.canonical_names (COCO order + fixed extras) over the model's
+  raw reported order, so a Roboflow model that lists its classes
+  alphabetically (or in any other order) doesn't scramble what saved alert
+  rules mean - those rules store class IDS, not names.
+  """
+  names = getattr(model, 'canonical_names', None) or getattr(model, 'names', None)
   if not names: return
   if list(names) != list(class_labels):
     print(f'Detection: model reports {len(names)} classes (was {len(class_labels)})')

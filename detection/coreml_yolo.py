@@ -23,6 +23,77 @@ def resolve_package(model_dirs, size):
     return None
 
 
+def _default_coco_names():
+    """Best-effort load of models/coco.names relative to this module, so a
+    caller that doesn't pass coco_names explicitly still gets one when the
+    repo layout is intact."""
+    from pathlib import Path
+    for candidate in (
+        Path(__file__).resolve().parent.parent / 'models' / 'coco.names',
+    ):
+        if candidate.exists():
+            return [l.strip() for l in candidate.read_text().splitlines() if l.strip()]
+    return None
+
+
+def build_canonical(model_names, coco_names, extras=('stroller', 'child', 'scooter')):
+    """Map a model's own class order onto ClearCam's stable canonical vocabulary.
+
+    canonical = coco_names (in COCO order) + extras (in the given fixed
+    order) + any other names the model has that don't normalise onto either
+    of those, appended in sorted order. This keeps saved alert rules (which
+    store class IDS) meaning the same thing regardless of the order a
+    Roboflow-trained model happens to list its classes in.
+
+    Returns (canonical_names, index_map) where index_map maps each index of
+    model_names to its index in canonical_names. A model name that doesn't
+    normalise onto anything in canonical is simply omitted from index_map
+    (its predictions get dropped by the caller).
+    """
+    from utils.roboflow_sync import normalise_class
+
+    canonical = list(coco_names)
+    for name in extras:
+        name = (name or '').strip()
+        if name and name.lower() not in {c.lower() for c in canonical}:
+            canonical.append(name)
+
+    # Names the model has that don't normalise onto coco_names+extras yet -
+    # collected first, then appended in sorted order (after normalising them
+    # against the canonical list built so far).
+    leftover = set()
+    for name in model_names:
+        norm = normalise_class(name, canonical)
+        if norm.lower() not in {c.lower() for c in canonical}:
+            leftover.add(norm)
+    canonical.extend(sorted(leftover))
+
+    lower_pos = {c.lower(): i for i, c in enumerate(canonical)}
+    index_map = {}
+    for i, name in enumerate(model_names):
+        norm = normalise_class(name, canonical)
+        pos = lower_pos.get(norm.lower())
+        if pos is not None:
+            index_map[i] = pos
+    return canonical, index_map
+
+
+def remap_class_ids(preds, lookup):
+    """Vectorised remap of column-5 class ids in an Nx6 preds array through
+    `lookup` (a 1D array where lookup[model_idx] = canonical_idx, or -1 for
+    'drop this prediction'). Rows that map to -1 are dropped."""
+    if preds.shape[0] == 0:
+        return preds
+    class_ids = preds[:, 5].astype(np.int64)
+    in_range = (class_ids >= 0) & (class_ids < len(lookup))
+    mapped = np.full(class_ids.shape, -1, dtype=np.int64)
+    mapped[in_range] = lookup[class_ids[in_range]]
+    keep = mapped >= 0
+    out = preds[keep].copy()
+    out[:, 5] = mapped[keep].astype(np.float32)
+    return out
+
+
 def available_sizes(model_dirs):
     """Detector sizes whose Core ML package is actually present."""
     from pathlib import Path
@@ -35,7 +106,7 @@ def available_sizes(model_dirs):
 class CoreMLYolo:
     kind = 'coreml'
 
-    def __init__(self, package_path, confidence=0.25, iou=0.45):
+    def __init__(self, package_path, confidence=0.25, iou=0.45, coco_names=None):
         import coremltools as ct
         from PIL import Image
         self._image = Image
@@ -51,6 +122,25 @@ class CoreMLYolo:
                 self.names = [parsed[i] for i in sorted(parsed, key=int)]
         except Exception:
             self.names = None
+
+        self.canonical_names = None
+        self._class_lookup = None  # None means identity (fast path)
+        if self.names:
+            coco = coco_names if coco_names is not None else _default_coco_names()
+            if coco:
+                canonical, index_map = build_canonical(self.names, coco)
+                self.canonical_names = canonical
+                if self.names == canonical[:len(self.names)] and all(
+                    index_map.get(i) == i for i in range(len(self.names))
+                ):
+                    # Stock COCO model (or already-canonical order): identity map,
+                    # skip the per-frame remap entirely.
+                    self._class_lookup = None
+                else:
+                    lookup = np.full(len(self.names), -1, dtype=np.int64)
+                    for src, dst in index_map.items():
+                        lookup[src] = dst
+                    self._class_lookup = lookup
 
     def __call__(self, frame_bgr):
         frame_bgr = np.asarray(frame_bgr)
@@ -84,4 +174,7 @@ class CoreMLYolo:
             x2.clip(0, width), y2.clip(0, height),
             scores, class_ids.astype(np.float32),
         ], axis=1).astype(np.float32)
-        return preds[scores >= self.confidence]
+        preds = preds[scores >= self.confidence]
+        if self._class_lookup is not None:
+            preds = remap_class_ids(preds, self._class_lookup)
+        return preds

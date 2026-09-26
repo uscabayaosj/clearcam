@@ -227,6 +227,76 @@ class MergeAndRemapTests(unittest.TestCase):
             self.assertEqual(b_lines, [])
 
 
+class FakeBytesResponse:
+    def __init__(self, data):
+        self._data = data
+        self._pos = 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            out = self._data[self._pos:]
+            self._pos = len(self._data)
+            return out
+        out = self._data[self._pos:self._pos + n]
+        self._pos += len(out)
+        return out
+
+
+class SequencedOpener:
+    """Like FakeOpener, but responses can be raw bytes-response objects (for
+    the weights download) mixed with dict payloads (for the JSON call)."""
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, request, timeout=30):
+        self.calls.append(request.full_url)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, (bytes, bytearray)):
+            return FakeBytesResponse(item)
+        return FakeResponse(item)
+
+
+class DownloadWeightsTests(unittest.TestCase):
+    def test_success_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(api_key='key123', workspace='ws', project='proj')
+            opener = SequencedOpener([
+                dict(weightsUrl='https://signed.example.com/weights.pt?sig=abc'),
+                b'PKweightbytes',
+            ])
+            dest = Path(tmp) / 'out'
+            result = rs.download_weights(cfg, 3, dest, opener=opener)
+            self.assertEqual(result, dest / 'weights.pt')
+            self.assertEqual(result.read_bytes(), b'PKweightbytes')
+            self.assertFalse((dest / 'weights.pt.partial').exists())
+            self.assertIn('/ws/proj/3/ptFile?', opener.calls[0])
+            self.assertNotIn('key123', str(opener.calls[1]))
+
+    def test_403_with_json_message_is_redacted_and_explained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(api_key='key123', workspace='ws', project='proj')
+            body = json.dumps({'message': 'key123 not authorized for weight downloads on this plan'}).encode('utf-8')
+            err = urllib.error.HTTPError('url', 403, 'forbidden', {}, io.BytesIO(body))
+            opener = SequencedOpener([err])
+            with self.assertRaises(rs.RoboflowError) as ctx:
+                rs.download_weights(cfg, 1, Path(tmp) / 'out', opener=opener)
+            message = str(ctx.exception)
+            self.assertIn('Roboflow refused the weights download', message)
+            self.assertIn('Weight downloads need a plan or academic access', message)
+            self.assertNotIn('key123', message)
+
+    def test_missing_weights_url_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(api_key='key123', workspace='ws', project='proj')
+            opener = SequencedOpener([dict(no='weightsUrl here')])
+            with self.assertRaises(rs.RoboflowError) as ctx:
+                rs.download_weights(cfg, 1, Path(tmp) / 'out', opener=opener)
+            self.assertIn('weightsUrl', str(ctx.exception))
+
+
 class ReadYamlNamesTests(unittest.TestCase):
     def test_inline_list_style(self):
         with tempfile.TemporaryDirectory() as tmp:

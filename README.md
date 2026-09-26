@@ -81,6 +81,26 @@ https://x.com/RoryClear/status/1959249250811785405
 - use DEV=AMD / DEV=NV python3 clearcam.py if your CPU is being used instead of your GPU
 - use BEAM=2 python3 clearcam.py for extra performance (wait time on first run)
 
+## Training on Roboflow
+Detector training happens in Roboflow's cloud; the Mac only downloads the trained
+weights and converts them to Core ML for the Neural Engine.
+
+1. Configure your Roboflow workspace/project/API key in the ClearCam web UI
+   (or `Data/roboflow.json`), then train a **YOLO11** (or YOLOv8)
+   **object-detection** model on your project's version there.
+2. The app understands COCO's 80 classes plus `stroller`, `child` and
+   `scooter`; any other class name your Roboflow model uses is dropped
+   (the conversion step prints the mapping so you can see what was kept).
+3. Once training finishes, run:
+   ```
+   bash script/roboflow_model.sh <version>
+   ```
+   This downloads the weights, converts them to Core ML, and installs them
+   for the app to pick up next launch. Pass `--size n`/`--size s`/`--size m`
+   to choose the detector slot, or `--project`/`--workspace` to override the
+   configured project.
+4. To undo the last install: `bash script/roboflow_model.sh --rollback`.
+
 ## install iOS App from source
 1. git clone https://github.com/roryclear/clearcam.git
 2. open ios/clearcam.xcodeproj

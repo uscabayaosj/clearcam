@@ -354,6 +354,78 @@ def sync_in_background(data_root, class_names):
 
 # ----------------------------------------------------------------------- download
 
+def download_weights(cfg, version, dest_dir, project=None, workspace=None, opener=None):
+    """Download the PyTorch weights for a trained Roboflow model version.
+
+    Mirrors roboflow-python's Model.download: a first request to the
+    'ptFile' endpoint returns {"weightsUrl": "<signed url>"} (the signed URL
+    itself needs no api_key and must not be logged in full); a second, plain
+    GET on that URL streams the actual weights file. Only the 'pt' format
+    exists for Roboflow-trained YOLO models.
+
+    Streams to dest_dir/'weights.pt' via a '.partial' file, then renames, so
+    a failed/aborted download never leaves a corrupt file at the final path.
+    Returns the Path to the written weights file.
+    """
+    opener = opener or _default_opener
+    api_key = cfg.get('api_key', '')
+    workspace = workspace or cfg.get('workspace', '')
+    project = project or cfg.get('project', '')
+    from urllib.parse import quote
+    meta_url = f'https://api.roboflow.com/{workspace}/{project}/{version}/ptFile?api_key={quote(api_key)}'
+    request = urllib.request.Request(meta_url, method='GET')
+    try:
+        resp = opener(request, timeout=60)
+    except urllib.error.HTTPError as err:
+        try:
+            body = err.read().decode('utf-8', 'replace')
+        except Exception:
+            body = ''
+        if api_key:
+            body = body.replace(api_key, '***')
+        message = body
+        try:
+            message = json.loads(body).get('message', body)
+        except ValueError:
+            pass
+        snippet = str(message)[:300]
+        raise RoboflowError(
+            f'Roboflow refused the weights download: {snippet}. '
+            'Weight downloads need a plan or academic access that includes them.'
+        )
+    payload = _read_json_response(resp)
+    weights_url = payload.get('weightsUrl')
+    if not weights_url:
+        raise RoboflowError('Roboflow response did not include a weightsUrl (no message given).')
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    final_path = dest_dir / 'weights.pt'
+    partial_path = dest_dir / 'weights.pt.partial'
+    # weights_url is a pre-signed URL; never log it in full.
+    request = urllib.request.Request(weights_url, method='GET')
+    try:
+        resp = opener(request, timeout=60)
+    except urllib.error.HTTPError as err:
+        try:
+            body = err.read().decode('utf-8', 'replace')
+        except Exception:
+            body = ''
+        raise RoboflowError(f'HTTP {err.code} downloading weights: {body[:300]}')
+    try:
+        with partial_path.open('wb') as stream:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                stream.write(chunk)
+    except Exception:
+        partial_path.unlink(missing_ok=True)
+        raise
+    partial_path.replace(final_path)
+    return final_path
+
+
 def download_dataset(cfg, version, dest_dir, opener=None):
     opener = opener or _default_opener
     api_key = cfg.get('api_key', '')
