@@ -231,19 +231,27 @@ def _raise_http_error(err, api_key):
     raise RoboflowError(f'HTTP {err.code}: {snippet}')
 
 
-def upload_entry(cfg, image_path, entry, class_names, opener=None):
+def upload_image_and_annotation(cfg, image_path, xml, split='train', batch='ClearCam corrections', opener=None,
+                                name=None):
+    """Upload one image plus a prebuilt Pascal VOC annotation string.
+
+    Shared by upload_entry (corrections, always split='train') and any other
+    caller that needs an arbitrary split/batch name - e.g. building a
+    training set from Roboflow Universe sources, which uploads to both
+    'train' and 'valid' under a per-source batch name.
+    """
     opener = opener or _default_opener
     api_key = cfg.get('api_key', '')
     project = cfg.get('project', '')
     image_path = Path(image_path)
     boundary = uuid.uuid4().hex
-    name = image_path.name
+    name = name or image_path.name   # name as stored in Roboflow; must be unique in the project
     data = image_path.read_bytes()
     # Same shape as Roboflow's own SDK: name and split travel as form fields
     # beside the file part.
     fields = ''.join(
         f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"\r\n\r\n{value}\r\n'
-        for field, value in (('name', name), ('split', 'train'))
+        for field, value in (('name', name), ('split', split))
     )
     body = (
         fields +
@@ -255,7 +263,7 @@ def upload_entry(cfg, image_path, entry, class_names, opener=None):
     from urllib.parse import quote
     upload_url = (
         f'https://api.roboflow.com/dataset/{project}/upload'
-        f'?api_key={quote(api_key)}&name={quote(name)}&split=train&batch=ClearCam%20corrections'
+        f'?api_key={quote(api_key)}&name={quote(name)}&split={quote(split)}&batch={quote(batch)}'
     )
     request = urllib.request.Request(
         upload_url, data=body, method='POST',
@@ -275,7 +283,6 @@ def upload_entry(cfg, image_path, entry, class_names, opener=None):
 
     # Annotation goes as JSON {annotationFile, labelmap}, as the SDK sends it;
     # overwrite=true keeps a re-sync from tripping over an earlier attempt.
-    xml = annotation_xml(entry, class_names)
     annotate_url = (
         f'https://api.roboflow.com/dataset/{project}/annotate/{quote(str(image_id))}'
         f'?api_key={quote(api_key)}&name={quote(name)}.xml&overwrite=true'
@@ -295,6 +302,59 @@ def upload_entry(cfg, image_path, entry, class_names, opener=None):
     if not payload.get('success'):
         raise RoboflowError(f'annotate failed: {json.dumps(payload)[:300]}')
     return dict(id=image_id, annotated=True)
+
+
+def upload_entry(cfg, image_path, entry, class_names, opener=None):
+    xml = annotation_xml(entry, class_names)
+    return upload_image_and_annotation(cfg, image_path, xml, split='train', batch='ClearCam corrections', opener=opener)
+
+
+def voc_xml_from_yolo_lines(lines, class_names, filename, width, height):
+    """Pascal VOC XML for a set of YOLO-normalised label lines, using class NAMES.
+
+    Mirrors annotation_xml's output shape (same tags Roboflow's classic
+    upload/annotate API expects) but starts from plain 'cls cx cy w h' lines
+    and pixel width/height, rather than a corrections-store entry.
+    """
+    objects = ''
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        try:
+            cls = int(parts[0])
+            cx, cy, w, h = (float(v) for v in parts[1:5])
+        except ValueError:
+            continue
+        if cls < 0 or cls >= len(class_names):
+            continue
+        x1 = (cx - w / 2) * width
+        y1 = (cy - h / 2) * height
+        x2 = (cx + w / 2) * width
+        y2 = (cy + h / 2) * height
+        name = class_names[cls]
+        objects += (
+            '  <object>\n'
+            f'    <name>{escape(str(name))}</name>\n'
+            '    <bndbox>\n'
+            f'      <xmin>{int(round(x1))}</xmin>\n'
+            f'      <ymin>{int(round(y1))}</ymin>\n'
+            f'      <xmax>{int(round(x2))}</xmax>\n'
+            f'      <ymax>{int(round(y2))}</ymax>\n'
+            '    </bndbox>\n'
+            '  </object>\n'
+        )
+    return (
+        '<annotation>\n'
+        f'  <filename>{escape(str(filename))}</filename>\n'
+        '  <size>\n'
+        f'    <width>{int(width)}</width>\n'
+        f'    <height>{int(height)}</height>\n'
+        '    <depth>3</depth>\n'
+        '  </size>\n'
+        f'{objects}'
+        '</annotation>\n'
+    )
 
 
 def sync(data_root, class_names, limit=100, opener=None):
@@ -529,8 +589,14 @@ ALIASES = {
     'kick scooter': 'scooter',
     'kickscooter': 'scooter',
     'pram': 'stroller',
+    'prams': 'stroller',
     'baby carriage': 'stroller',
+    'carriage': 'stroller',
     'buggy': 'stroller',
+    'kickboard': 'scooter',
+    'electric-kickboard': 'scooter',
+    'kick-scooter': 'scooter',
+    'electric scooter': 'scooter',
     'stop': 'stop sign',
     'cats': 'cat',
     'dogs': 'dog',

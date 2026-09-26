@@ -101,6 +101,24 @@ weights and converts them to Core ML for the Neural Engine.
    configured project.
 4. To undo the last install: `bash script/roboflow_model.sh --rollback`.
 
+### Building a training set from Roboflow Universe
+`script/roboflow_dataset.py` pulls public Roboflow Universe datasets, keeps
+only 8 classes (`person`, `bicycle`, `car`, `truck`, `dog`, `stroller`,
+`child`, `scooter`), pseudo-labels the COCO ones a source doesn't already box
+with a teacher model, and uploads the result into your own Roboflow project
+so you can train there instead of running out of memory locally:
+```
+bash script/roboflow_dataset.sh \
+  --source marcu/stroller-vxfbx --source kpz3/stroller-tdpar \
+  --source riley-zrx25/kids_adult-nqdo8 --source kicksquad/scooter-detect \
+  --source whitera1313its-workspace/scooter-yhjgq
+```
+Add `--dry-run` first to preview the per-class box counts without uploading
+anything, `--max-images` to change the per-source cap (default 1500), or
+`--target-project` to upload somewhere other than the configured project.
+Reruns skip images already uploaded (tracked in a local ledger), so it's safe
+to Ctrl-C and resume.
+
 ## install iOS App from source
 1. git clone https://github.com/roryclear/clearcam.git
 2. open ios/clearcam.xcodeproj

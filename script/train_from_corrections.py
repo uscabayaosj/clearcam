@@ -195,6 +195,21 @@ def holdout_filenames(filenames, fraction=0.10):
     return set(ranked[:n])
 
 
+def teacher_predict_batches(teacher, paths, batch=16, conf=0.5, device='mps'):
+    """Yield one ultralytics Result per path in paths, running the teacher in
+    small batches so a large dataset never gets loaded into memory at once.
+
+    Given the whole list at once, ultralytics treats it as ONE batch and
+    decodes every image up front - a 6,000-image dataset got the process
+    killed on this Mac. Batches of 16 keep memory bounded while still using
+    the GPU (device='mps') for throughput.
+    """
+    paths = list(paths)
+    for i in range(0, len(paths), batch):
+        chunk = paths[i:i + batch]
+        yield from teacher.predict([str(x) for x in chunk], conf=conf, verbose=False, batch=len(chunk), device=device)
+
+
 def list_images(d):
     d = Path(d)
     if not d.is_dir():
@@ -310,14 +325,7 @@ def _prepare_external_dataset(key, data_yaml_path, index_map, out_root, teacher,
         images_out.mkdir(parents=True, exist_ok=True)
         labels_out.mkdir(parents=True, exist_ok=True)
         n_images = n_orig = n_teacher = 0
-        # Teacher in small batches: given the whole list at once, the library
-        # treats it as ONE batch and loads every image into memory (a
-        # 6,000-image dataset got the process killed).
-        def teacher_results(paths, batch=16):
-            for i in range(0, len(paths), batch):
-                chunk = paths[i:i + batch]
-                yield from teacher.predict([str(x) for x in chunk], conf=0.5, verbose=False, batch=len(chunk), device='mps')
-        predictions = teacher_results(image_paths) if teacher is not None and image_paths else iter(())
+        predictions = teacher_predict_batches(teacher, image_paths) if teacher is not None and image_paths else iter(())
         for img_path in image_paths:
             result = next(predictions, None) if teacher is not None else None
             link = images_out / img_path.name
