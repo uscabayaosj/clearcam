@@ -1,7 +1,9 @@
 """Build a training set from public Roboflow Universe datasets, remapped onto
 ClearCam's 8-class vocabulary, and upload it into your own Roboflow project so
 training happens in Roboflow's cloud (this Mac runs out of memory training
-locally on anything but the smallest datasets).
+locally on anything but the smallest datasets). Can also upload the owner's
+own unlabelled camera frames (see script/collect_frames.py), teacher-labelled
+in full since they carry no labels of their own.
 
 Usage (training venv):
   <train-venv>/bin/python script/roboflow_dataset.py \
@@ -10,7 +12,23 @@ Usage (training venv):
       --source riley-zrx25/kids_adult-nqdo8 --source kicksquad/scooter-detect \
       --source whitera1313its-workspace/scooter-yhjgq \
       [--target-project clearcam-home] [--max-images 1500] [--teacher yolo11m.pt] \
-      [--workers 4] [--dry-run] [--work ~/.clearcam-rf-build]
+      [--teacher-conf 0.5] [--workers 4] [--dry-run] [--work ~/.clearcam-rf-build]
+
+Own-camera flow (collect -> select -> upload):
+  python script/collect_frames.py collect --hours 12
+  python script/collect_frames.py select --per-camera 150
+  bash script/roboflow_dataset.sh --local ~/.clearcam-rf-build/own/selected \
+      --teacher yolo11x.pt --teacher-conf 0.35
+
+`--local DIR` (repeatable) uploads unlabelled frames from
+<DIR>/train/images and <DIR>/valid/images (as produced by
+script/collect_frames.py's `select` step) with the teacher labelling every
+target class, since there is no source label to trust instead. <DIR>/holdout
+is never read here - those frames are kept aside for script/compare_models.py
+to judge a trained model, not for training. A local source needs no
+--source at all, has no --max-images subsampling (there aren't many frames
+to begin with), and requires a real --teacher (there's nothing else to label
+the images with).
 
 What it does, and why:
   1. Each --source is 'workspace/project' or 'workspace/project:version'; when
@@ -266,7 +284,7 @@ def upload_with_retry(cfg, image_path, xml, split, batch, opener=None, max_tries
 # ------------------------------------------------------------- source prepare
 
 def prepare_source(cfg, work_dir, workspace, project, version, max_images, teacher, teacher_index_map,
-                    print_prefix=None, class_names=None):
+                    print_prefix=None, class_names=None, teacher_conf=0.5):
     """Download (if needed), subsample, remap and teacher-augment one source.
 
     Returns (records, counts): records is a list of dicts with path, lines
@@ -317,7 +335,7 @@ def prepare_source(cfg, work_dir, workspace, project, version, max_images, teach
     records = []
     counts = {name: 0 for name in TARGET_CLASSES}
     image_paths = [p for p, _ in selected]
-    predictions = tfc.teacher_predict_batches(teacher, image_paths) if teacher is not None and image_paths else iter(())
+    predictions = tfc.teacher_predict_batches(teacher, image_paths, conf=teacher_conf) if teacher is not None and image_paths else iter(())
     for n, (img_path, split) in enumerate(selected):
         result = next(predictions, None) if teacher is not None else None
         label_path = img_path.parent.parent / 'labels' / (img_path.stem + '.txt')
@@ -346,6 +364,70 @@ def prepare_source(cfg, work_dir, workspace, project, version, max_images, teach
     return records, counts
 
 
+# --------------------------------------------------------------- local source
+
+def local_source_images(dirpath):
+    """(path, split) for every image under <dirpath>/train/images and
+    <dirpath>/valid/images. <dirpath>/holdout is deliberately never read
+    here - those frames are reserved for script/compare_models.py."""
+    dirpath = Path(dirpath)
+    pairs = []
+    for split in ('train', 'valid'):
+        d = dirpath / split / 'images'
+        if not d.is_dir():
+            continue
+        for p in sorted(p for p in d.iterdir() if p.suffix.lower() in tfc.IMAGE_EXTS):
+            pairs.append((p, split))
+    return pairs
+
+
+def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_prefix=None):
+    """Teacher-label every image under a local (own-camera) source directory.
+
+    These frames carry no labels of their own (collect_frames.py's `select`
+    step writes bare images), so the teacher labels every target class the
+    normal partial-label path would otherwise trust to a source's own
+    annotations for - labelled_classes is passed empty. Unlike a Roboflow
+    Universe source, there is no --max-images subsampling: there typically
+    aren't many own-camera frames to begin with.
+    """
+    from PIL import Image
+    dirpath = Path(dirpath)
+    print_prefix = print_prefix or f'local:{dirpath.name}'
+    pairs = local_source_images(dirpath)
+    person_idx = TARGET_CLASSES.index('person')
+    child_idx = TARGET_CLASSES.index('child')
+    batch = f'own:{dirpath.name}'
+
+    records = []
+    counts = {name: 0 for name in TARGET_CLASSES}
+    image_paths = [p for p, _ in pairs]
+    predictions = tfc.teacher_predict_batches(teacher, image_paths, conf=teacher_conf) if image_paths else iter(())
+    for n, (img_path, split) in enumerate(pairs):
+        result = next(predictions, None)
+        with Image.open(img_path) as im:
+            width, height = im.size
+        lines = []
+        if result is not None and len(result.boxes):
+            teacher_boxes = [
+                (teacher_index_map[int(c)], b, float(f))
+                for b, c, f in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist(), result.boxes.conf.tolist())
+                if int(c) in teacher_index_map
+            ]
+            if teacher_boxes:
+                lines = tfc.augment_labels([], teacher_boxes, set(), width, height,
+                                            person_class=person_idx, child_class=child_idx)
+        for line in lines:
+            cls = int(line.split()[0])
+            counts[TARGET_CLASSES[cls]] += 1
+        records.append(dict(path=img_path, lines=lines, split=split, orig_name=img_path.name,
+                             width=width, height=height, final_name=img_path.name, batch=batch))
+        if (n + 1) % 500 == 0:
+            print(f'{print_prefix}: prepared {n + 1}/{len(pairs)}', flush=True)
+    print(f'{print_prefix}: prepared {len(records)} images from local frames', flush=True)
+    return records, counts
+
+
 # -------------------------------------------------------------------- driver
 
 def format_counts(counts):
@@ -358,8 +440,15 @@ def main():
     parser.add_argument('--source', action='append', default=[], dest='sources',
                          help="Repeatable. 'workspace/project' or 'workspace/project:version'; "
                               "omit the version to use the source's latest.")
-    parser.add_argument('--max-images', type=int, default=1500, help='per source (default 1500)')
-    parser.add_argument('--teacher', default='yolo11m.pt', help="'none' to skip teacher pseudo-labels")
+    parser.add_argument('--local', action='append', default=[], dest='locals',
+                         help="Repeatable. A local (own-camera) source directory with train/images and "
+                              "valid/images (holdout/images, if present, is ignored). Needs a real "
+                              "--teacher: these frames have no labels of their own.")
+    parser.add_argument('--max-images', type=int, default=1500, help='per Universe source (default 1500); '
+                                                                       'local sources are never subsampled')
+    parser.add_argument('--teacher', default='yolo11m.pt', help="'none' to skip teacher pseudo-labels "
+                                                                  "(not allowed together with --local)")
+    parser.add_argument('--teacher-conf', type=float, default=0.5, help='teacher confidence threshold (default 0.5)')
     parser.add_argument('--target-project', default=None, help='default: the configured project')
     parser.add_argument('--workers', type=int, default=4, help='concurrent uploads (default 4)')
     parser.add_argument('--class-names', action='append', default=[],
@@ -370,8 +459,11 @@ def main():
                          help='scratch dir for downloads/ledger (default ~/.clearcam-rf-build)')
     args = parser.parse_args()
 
-    if not args.sources:
-        sys.exit('at least one --source workspace/project[:version] is required')
+    if not args.sources and not args.locals:
+        sys.exit('at least one --source workspace/project[:version] or --local DIR is required')
+    if args.locals and (args.teacher or 'none').strip().lower() == 'none':
+        sys.exit('--teacher none cannot be used with --local: local frames have no labels of their own '
+                  'for the teacher to fall back from')
 
     data_root = Path(args.data).expanduser()
     work_dir = Path(args.work).expanduser()
@@ -418,7 +510,8 @@ def main():
         prefix = f'{workspace}/{project} v{version}'
         records, counts = prepare_source(cfg, work_dir, workspace, project, version, args.max_images,
                                           teacher, teacher_index_map, print_prefix=prefix,
-                                          class_names=name_overrides.get(f'{workspace}/{project}'))
+                                          class_names=name_overrides.get(f'{workspace}/{project}'),
+                                          teacher_conf=args.teacher_conf)
         print(f'{prefix}: box counts {format_counts(counts)}', flush=True)
         for k, v in counts.items():
             totals[k] += v
@@ -426,6 +519,16 @@ def main():
         for rec in records:
             rec['final_name'] = f"{slug}_{rec['orig_name']}"
             rec['batch'] = batch
+        all_records.extend(records)
+
+    for raw_dir in args.locals:
+        dirpath = Path(raw_dir).expanduser()
+        prefix = f'local:{dirpath.name}'
+        records, counts = prepare_local(dirpath, teacher, teacher_index_map,
+                                         teacher_conf=args.teacher_conf, print_prefix=prefix)
+        print(f'{prefix}: box counts {format_counts(counts)}', flush=True)
+        for k, v in counts.items():
+            totals[k] += v
         all_records.extend(records)
 
     print(f'totals across all sources: {format_counts(totals)}')

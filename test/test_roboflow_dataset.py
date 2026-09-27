@@ -339,6 +339,141 @@ def test_voc_xml_trims_boxes_to_the_image():
     assert xml.count('<object>') == 1   # the box wholly outside is dropped
 
 
+class ListLike(list):
+    """Stands in for a torch tensor's .tolist() in fake ultralytics results."""
+    def tolist(self):
+        return list(self)
+
+
+class FakeBoxes:
+    def __init__(self, xyxy, cls, conf):
+        self.xyxy = ListLike(xyxy)
+        self.cls = ListLike(cls)
+        self.conf = ListLike(conf)
+
+    def __len__(self):
+        return len(self.xyxy)
+
+
+class FakeResult:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+
+def _make_image(path, size=(64, 48)):
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new('RGB', size).save(path)
+
+
+# ------------------------------------------------------------- local sources
+
+class LocalSourceImagesTests(unittest.TestCase):
+    def test_ignores_holdout_and_splits_by_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            for split in ('train', 'valid', 'holdout'):
+                _make_image(dirpath / split / 'images' / f'own-cam-{split}.jpg')
+            pairs = rd.local_source_images(dirpath)
+            got = sorted((p.name, split) for p, split in pairs)
+            self.assertEqual(got, [('own-cam-train.jpg', 'train'), ('own-cam-valid.jpg', 'valid')])
+
+    def test_missing_split_dirs_is_fine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            _make_image(dirpath / 'train' / 'images' / 'own-cam-a.jpg')
+            pairs = rd.local_source_images(dirpath)
+            self.assertEqual([p.name for p, _s in pairs], ['own-cam-a.jpg'])
+
+
+class PrepareLocalTests(unittest.TestCase):
+    def _fake_teacher_predict_batches(self, teacher, paths, batch=16, conf=0.5, device='mps'):
+        self.recorded_conf = conf
+        for _p in paths:
+            yield FakeResult(FakeBoxes([[0, 0, 10, 10]], [0], [0.9]))
+
+    def setUp(self):
+        self._orig = rd.tfc.teacher_predict_batches
+        rd.tfc.teacher_predict_batches = self._fake_teacher_predict_batches
+        self.recorded_conf = None
+
+    def tearDown(self):
+        rd.tfc.teacher_predict_batches = self._orig
+
+    def test_batch_name_split_and_filename_passthrough(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            _make_image(dirpath / 'train' / 'images' / 'own-cam-1.jpg')
+            _make_image(dirpath / 'valid' / 'images' / 'own-cam-2.jpg')
+            _make_image(dirpath / 'holdout' / 'images' / 'own-cam-3.jpg')  # must be ignored
+
+            teacher_index_map = {0: TARGET.index('person')}
+            records, counts = rd.prepare_local(dirpath, teacher=object(),
+                                                teacher_index_map=teacher_index_map, teacher_conf=0.35)
+
+            self.assertEqual(len(records), 2)
+            by_name = {r['orig_name']: r for r in records}
+            self.assertEqual(set(by_name), {'own-cam-1.jpg', 'own-cam-2.jpg'})
+            self.assertEqual(by_name['own-cam-1.jpg']['split'], 'train')
+            self.assertEqual(by_name['own-cam-2.jpg']['split'], 'valid')
+            for r in records:
+                self.assertEqual(r['final_name'], r['orig_name'])   # already unique, passed through as-is
+                self.assertEqual(r['batch'], 'own:selected')
+            self.assertEqual(counts['person'], 2)   # teacher labelled every image
+            self.assertEqual(self.recorded_conf, 0.35)
+
+    def test_no_images_no_teacher_calls_needed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'empty'
+            records, counts = rd.prepare_local(dirpath, teacher=object(), teacher_index_map={}, teacher_conf=0.5)
+            self.assertEqual(records, [])
+            self.assertEqual(sum(counts.values()), 0)
+
+
+class MainArgValidationTests(unittest.TestCase):
+    """main()'s early --source/--local and --teacher validation, before any
+    config file, network, or model loading is touched."""
+
+    def _run_main_with_argv(self, argv):
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                rd.main()
+            return str(ctx.exception)
+        finally:
+            sys.argv = old_argv
+
+    def test_requires_source_or_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            msg = self._run_main_with_argv(['roboflow_dataset.py', '--data', tmp])
+            self.assertIn('--source', msg)
+            self.assertIn('--local', msg)
+
+    def test_local_works_with_zero_source_args_past_validation(self):
+        # teacher-none-with-local should fire, proving --local alone (no
+        # --source) got past the "need at least one" check.
+        with tempfile.TemporaryDirectory() as tmp:
+            msg = self._run_main_with_argv(
+                ['roboflow_dataset.py', '--data', tmp, '--local', str(Path(tmp) / 'selected'), '--teacher', 'none'])
+            self.assertIn('--teacher none', msg)
+
+    def test_teacher_none_with_local_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            msg = self._run_main_with_argv(
+                ['roboflow_dataset.py', '--data', tmp, '--local', str(Path(tmp) / 'selected'), '--teacher', 'none'])
+            self.assertIn('--teacher none', msg)
+            self.assertIn('--local', msg)
+
+    def test_teacher_none_without_local_is_fine_past_this_check(self):
+        # sources-only + --teacher none should NOT hit the local/teacher
+        # error; it fails later (no api key configured) instead.
+        with tempfile.TemporaryDirectory() as tmp:
+            msg = self._run_main_with_argv(
+                ['roboflow_dataset.py', '--data', tmp, '--source', 'ws/proj', '--teacher', 'none'])
+            self.assertNotIn('cannot be used with --local', msg)
+
+
 def test_polygon_label_lines_become_enclosing_boxes():
     from utils import roboflow_sync
     poly = '0 0.2 0.5 0.4 0.5 0.4 0.9 0.2 0.9'

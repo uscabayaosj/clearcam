@@ -119,6 +119,33 @@ anything, `--max-images` to change the per-source cap (default 1500), or
 Reruns skip images already uploaded (tracked in a local ledger), so it's safe
 to Ctrl-C and resume.
 
+### Training on your own cameras
+`script/collect_frames.py` grabs stills straight from your running ClearCam
+cameras (no credentials needed - it just asks the engine for frames already
+in memory), then keeps a visually varied subset split into train/valid
+(uploaded) and holdout (kept back to judge a trained model on your own
+cameras, never uploaded):
+```
+python script/collect_frames.py collect --hours 12 --interval 120
+python script/collect_frames.py select --per-camera 150
+```
+Upload the selected frames with `--local` (`script/roboflow_dataset.py`
+accepts it as an alternative, or addition, to `--source`); since these
+frames carry no labels of their own, a real `--teacher` labels every target
+class:
+```
+bash script/roboflow_dataset.sh --local ~/.clearcam-rf-build/own/selected \
+    --teacher yolo11x.pt --teacher-conf 0.35
+```
+Once a trained model is downloaded and installed (`script/roboflow_model.sh`),
+compare it against the stock detector on the holdout frames `select` set
+aside:
+```
+python script/compare_models.py \
+    --candidate "$HOME/Library/Application Support/ClearCam/Data/training/roboflow-models/clearcam-home-v4/weights.pt" \
+    --sheet ~/Desktop/compare.jpg
+```
+
 ## install iOS App from source
 1. git clone https://github.com/roryclear/clearcam.git
 2. open ios/clearcam.xcodeproj
