@@ -3,6 +3,9 @@ from utils.runtime_paths import model_asset as fetch
 from utils import native_session
 from detection.yolov9 import YOLOv9
 from detection import coreml_yolo
+from utils import assist_merge
+
+assist_model = None  # optional vehicle-assist Core ML detector; see make_assist_detector
 
 
 def make_detector(model_size, model_res):
@@ -18,6 +21,24 @@ def make_detector(model_size, model_res):
         print('Core ML unavailable, using tinygrad YOLO:', error)
   print('Detection: tinygrad YOLO', model_size)
   return YOLOv9(model_size, model_res)
+
+
+def make_assist_detector():
+  """Optional second Core ML detector specialised for cars/trucks/strollers
+  (Data/models/vehicle-assist.mlpackage). Absent by default; when absent,
+  detection behaves exactly as it did before this model existed."""
+  if os.environ.get('CLEARCAM_NO_COREML') == '1':
+    return None
+  package = coreml_yolo.resolve_assist_package([os.environ.get('CLEARCAM_MODEL_DIR'), 'models', str(BASE_DIR / 'models')])
+  if package is None:
+    return None
+  try:
+    detector = coreml_yolo.CoreMLYolo(package)
+    print('Detection: vehicle assist', package)
+    return detector
+  except Exception as error:
+    print('Vehicle assist model unavailable:', error)
+    return None
 
 
 def apply_model_class_names(model, class_labels, color_dict):
@@ -1091,6 +1112,12 @@ class VideoCapture:
     orig_h, orig_w = frame.shape[0], frame.shape[1]
     if getattr(model, 'kind', None) == 'coreml':
       preds = model(frame)  # numpy in, numpy out; runs on the Neural Engine
+      if assist_model is not None:
+        # Vehicle assist finds far more cars/trucks (and covers strollers, which
+        # the primary's COCO classes don't have at all) but misses most people,
+        # so it only ever supplies those few classes; everything else stays
+        # exactly as the primary detector saw it.
+        preds = assist_merge.merge_assist(preds, assist_model(frame))
     else:
       frame = Tensor(frame)
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
@@ -2642,6 +2669,7 @@ if __name__ == "__main__":
 
   model = make_detector(global_settings.model_size, int(global_settings.model_res))
   apply_model_class_names(model, class_labels, color_dict)
+  assist_model = make_assist_detector()
   object_finder = ObjectFinder()
   cam = VideoCapture()
   cam.record_video = getattr(global_settings, 'record_video', False)

@@ -58,6 +58,66 @@ class BuildCanonicalTests(unittest.TestCase):
         self.assertEqual(index_map[1], 83)
 
 
+class VehicleAssistCanonicalIdsTests(unittest.TestCase):
+    """The vehicle-assist model's own 8-class vocabulary must land on the same
+    canonical ids as the primary model (car=2, truck=7, stroller=80), since
+    utils.assist_merge.merge_assist filters by those ids across both."""
+
+    def test_assist_classes_map_onto_primary_canonical_ids(self):
+        assist_names = ['bicycle', 'car', 'child', 'dog', 'person', 'scooter', 'stroller', 'truck']
+        canonical, index_map = build_canonical(assist_names, COCO)
+        self.assertEqual(canonical[:83], COCO + ['stroller', 'child', 'scooter'])
+        self.assertEqual(index_map[assist_names.index('car')], COCO.index('car'))
+        self.assertEqual(index_map[assist_names.index('truck')], COCO.index('truck'))
+        self.assertEqual(index_map[assist_names.index('stroller')], 80)
+        self.assertEqual(COCO.index('car'), 2)
+        self.assertEqual(COCO.index('truck'), 7)
+
+
+class ApplyModelClassNamesStrollerTests(unittest.TestCase):
+    """apply_model_class_names (clearcam.py) mirrors a model's canonical_names
+    onto class_labels; when a model (assist or -home) has 'stroller' in its
+    own vocabulary, canonical_names always includes it at id 80 - so
+    class_labels ends up with 'stroller' too."""
+
+    class FakeModel:
+        def __init__(self, names, canonical_names=None):
+            self.names = names
+            self.canonical_names = canonical_names
+
+    @staticmethod
+    def apply_model_class_names(model, class_labels, color_dict):
+        # Mirrors clearcam.apply_model_class_names without importing clearcam.py
+        # (which has heavy hardware-only top-level imports).
+        names = getattr(model, 'canonical_names', None) or getattr(model, 'names', None)
+        if not names:
+            return
+        class_labels[:] = names
+        color_dict.clear()
+        color_dict.update({label: (0, 0, 0) for label in class_labels})
+
+    def test_stroller_present_when_assist_model_canonical_names_used(self):
+        assist_names = ['bicycle', 'car', 'child', 'dog', 'person', 'scooter', 'stroller', 'truck']
+        canonical, _ = build_canonical(assist_names, COCO)
+        model = self.FakeModel(names=assist_names, canonical_names=canonical)
+        class_labels = list(COCO)
+        color_dict = {}
+        self.apply_model_class_names(model, class_labels, color_dict)
+        self.assertIn('stroller', class_labels)
+        self.assertEqual(class_labels.index('stroller'), 80)
+
+    def test_stock_coco_model_canonical_names_also_includes_stroller(self):
+        # build_canonical always reserves 80-82 for the fixed extras, even for
+        # a plain COCO model, so the primary detector's class_labels already
+        # carry 'stroller' regardless of whether assist is installed.
+        canonical, _ = build_canonical(COCO, COCO)
+        model = self.FakeModel(names=COCO, canonical_names=canonical)
+        class_labels = list(COCO)
+        color_dict = {}
+        self.apply_model_class_names(model, class_labels, color_dict)
+        self.assertIn('stroller', class_labels)
+
+
 class RemapClassIdsTests(unittest.TestCase):
     def test_drops_unmapped_classes_and_remaps_others(self):
         # model has 3 classes: 0 -> canonical 5, 1 -> unmapped (-1), 2 -> canonical 2

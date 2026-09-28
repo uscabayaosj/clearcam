@@ -53,19 +53,42 @@ def _models_dir(data_root):
     return Path(data_root) / 'models'
 
 
-def _package_paths(data_root, size):
+ASSIST_STEM = 'vehicle-assist'  # detection.coreml_yolo.resolve_assist_package looks for this name
+
+
+def _package_paths(data_root, size, assist=False):
     models_dir = _models_dir(data_root)
-    # Same file name the engine looks for (detection.coreml_yolo.resolve_package):
-    # size 't' is yolo11n, so a tuned nano model is yolo11n-home.mlpackage.
-    stem = MODEL_FILES[size].replace('.mlpackage', '-home')
+    if assist:
+        # Fixed name (independent of --size): detection.coreml_yolo.resolve_assist_package.
+        stem = ASSIST_STEM
+    else:
+        # Same file name the engine looks for (detection.coreml_yolo.resolve_package):
+        # size 't' is yolo11n, so a tuned nano model is yolo11n-home.mlpackage.
+        stem = MODEL_FILES[size].replace('.mlpackage', '-home')
     target = models_dir / f'{stem}.mlpackage'
     previous = models_dir / f'{stem}.previous.mlpackage'
     meta = models_dir / f'{stem}.json'
     return target, previous, meta
 
 
-def rollback(data_root, size):
-    target, previous, meta = _package_paths(data_root, size)
+def _read_package_names(path):
+    """Best-effort read of a .mlpackage's embedded class names, the same way
+    detection.coreml_yolo.CoreMLYolo does, without needing ultralytics."""
+    try:
+        import ast
+        import coremltools as ct
+        mlmodel = ct.models.MLModel(str(path))
+        raw = mlmodel.user_defined_metadata.get('names')
+        if raw:
+            parsed = ast.literal_eval(raw)
+            return [parsed[i] for i in sorted(parsed, key=int)]
+    except Exception as err:  # noqa: BLE001 - names are informational only
+        print(f'warning: could not read class names from {path}: {err}')
+    return None
+
+
+def rollback(data_root, size, assist=False):
+    target, previous, meta = _package_paths(data_root, size, assist)
     if previous.exists():
         if target.exists():
             shutil.rmtree(target)
@@ -104,15 +127,47 @@ def main():
                          help="the detector slot to install into (default: 's'; "
                               "does not need to match Roboflow's training size)")
     parser.add_argument('--rollback', action='store_true')
+    parser.add_argument('--assist', action='store_true',
+                         help="install into Data/models/vehicle-assist.mlpackage (the vehicle "
+                              "assist detector slot) instead of the size-based -home slot; "
+                              "--size is ignored in this mode")
+    parser.add_argument('--from-local', default=None, metavar='PATH',
+                         help='install an already-converted .mlpackage directly (e.g. a previous '
+                              'export'"'"'s weights.mlpackage), skipping download and re-conversion')
     args = parser.parse_args()
 
     data_root = Path(args.data).expanduser()
     if args.rollback:
-        rollback(data_root, args.size)
+        rollback(data_root, args.size, args.assist)
+        return
+
+    target, previous, meta = _package_paths(data_root, args.size, args.assist)
+
+    if args.from_local:
+        source = Path(args.from_local).expanduser()
+        if not source.exists():
+            sys.exit(f'--from-local path not found: {source}')
+        model_names = _read_package_names(source)
+        if model_names:
+            print_class_mapping(model_names)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if previous.exists():
+                shutil.rmtree(previous)
+            shutil.move(str(target), str(previous))
+            print(f'kept previous package as {previous.name} (use --rollback to restore it).')
+        shutil.copytree(str(source), str(target))
+        meta.write_text(json.dumps(dict(
+            source='local', path=str(source), version=args.version,
+            names=model_names, installed_at=datetime.datetime.now().isoformat(),
+        ), indent=2))
+        print(f'installed {target}')
+        rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --assist' if args.assist else '')
+        print(f'Installed. Quit and reopen ClearCam to use it. To roll back: {rollback_cmd}')
         return
 
     if args.version is None:
-        sys.exit('a Roboflow version is required unless --rollback is given')
+        sys.exit('a Roboflow version is required unless --rollback or --from-local is given')
 
     cfg = roboflow_sync.load_config(data_root)
     workspace = args.workspace or cfg.get('workspace', '')
@@ -146,7 +201,6 @@ def main():
     print('exporting Core ML (Neural Engine)...', flush=True)
     exported = Path(model.export(format='coreml', nms=True, imgsz=640))
 
-    target, previous, meta = _package_paths(data_root, args.size)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         if previous.exists():
@@ -161,7 +215,8 @@ def main():
     ), indent=2))
 
     print(f'installed {target}')
-    print('Installed. Quit and reopen ClearCam to use it. To roll back: bash script/roboflow_model.sh --rollback')
+    rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --assist' if args.assist else '')
+    print(f'Installed. Quit and reopen ClearCam to use it. To roll back: {rollback_cmd}')
 
 
 if __name__ == '__main__':

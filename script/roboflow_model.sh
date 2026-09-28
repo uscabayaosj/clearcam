@@ -3,6 +3,9 @@
 #   bash script/roboflow_model.sh 3                       # install version 3 into the 's' slot
 #   bash script/roboflow_model.sh 3 --size t              # install into the nano ('t') slot
 #   bash script/roboflow_model.sh 3 --project P --workspace W
+#   bash script/roboflow_model.sh 5 --assist               # install vehicle-assist (cars/trucks/strollers)
+#   bash script/roboflow_model.sh --rollback --assist       # undo the last vehicle-assist install
+#   bash script/roboflow_model.sh --assist --from-local /path/to/weights.mlpackage  # reuse an already-converted package
 #   bash script/roboflow_model.sh --rollback               # undo the last install
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

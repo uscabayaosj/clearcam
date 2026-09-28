@@ -94,6 +94,21 @@ def remap_class_ids(preds, lookup):
     return out
 
 
+ASSIST_MODEL_FILE = 'vehicle-assist.mlpackage'
+
+
+def resolve_assist_package(model_dirs, name=ASSIST_MODEL_FILE):
+    """Optional second detector specialised for cars/trucks/strollers.
+
+    Lives at Data/models/vehicle-assist.mlpackage; absent by default, in which
+    case the caller should behave exactly as it did before this model existed.
+    """
+    from pathlib import Path
+    for d in model_dirs:
+        if d and (Path(d) / name).exists(): return Path(d) / name
+    return None
+
+
 def available_sizes(model_dirs):
     """Detector sizes whose Core ML package is actually present."""
     from pathlib import Path
