@@ -20,6 +20,13 @@ def zone(id='z1', name='Yard', polygon=SQUARE, classes=('person',), metric='pass
             "classes": list(classes), "metric": metric}
 
 
+def make_counter(*args, **kwargs):
+    # Existing tests start counting and feed objects at the same instant;
+    # the startup grace (objects already present aren't new entries) has its own tests.
+    kwargs.setdefault('startup_grace', 0.0)
+    return count_zones.ZoneCounter(*args, **kwargs)
+
+
 class ParseZonesTests(unittest.TestCase):
     def test_none_and_empty_are_a_noop(self):
         self.assertEqual(count_zones.parse_zones(None), [])
@@ -119,7 +126,7 @@ def box_at(cx, cy, half=0.02):
 
 class ZoneCounterEntryExitTests(unittest.TestCase):
     def setUp(self):
-        self.counter = count_zones.ZoneCounter([zone()], now=1_000_000.0)
+        self.counter = make_counter([zone()], now=1_000_000.0)
 
     def snap(self, now):
         by_id = {z['id']: z for z in self.counter.snapshot(now)}
@@ -172,7 +179,7 @@ class ZoneCounterEntryExitTests(unittest.TestCase):
 
     def test_dwell_zone_uses_longer_lost_timeout(self):
         z = zone(metric='dwell', classes=('car',))
-        counter = count_zones.ZoneCounter([z], now=1_000_000.0)
+        counter = make_counter([z], now=1_000_000.0)
         t0 = 1_000_000.0
         counter.update(t0, [(1, 'car', box_at(0.5, 0.5))])
         counter.update(t0 + 0.6, [(1, 'car', box_at(0.5, 0.5))])
@@ -183,10 +190,17 @@ class ZoneCounterEntryExitTests(unittest.TestCase):
         snap = {z['id']: z for z in counter.snapshot(gap)}['z1']
         self.assertEqual(snap['stats']['car']['exited'], 0)
         self.assertEqual(len(snap['inside_now']), 1)
-        # But gone past the dwell timeout -> closed.
+        # Past the dwell timeout it is held as a lost stay (it may be re-found
+        # at the same spot), still shown inside...
         gone = t0 + 0.6 + count_zones.DWELL_LOST_TIMEOUT + 1
         counter.update(gone, [])
         snap = {z['id']: z for z in counter.snapshot(gone)}['z1']
+        self.assertEqual(snap['stats']['car']['exited'], 0)
+        self.assertEqual(len(snap['inside_now']), 1)
+        # ...and recorded as exited once nobody resumes it within the window.
+        later = gone + count_zones.RESUME_WINDOW + 1
+        counter.update(later, [])
+        snap = {z['id']: z for z in counter.snapshot(later)}['z1']
         self.assertEqual(snap['stats']['car']['exited'], 1)
 
     def test_only_matching_class_is_counted(self):
@@ -207,7 +221,7 @@ class ZoneCounterEntryExitTests(unittest.TestCase):
 class DwellStatsTests(unittest.TestCase):
     def test_dwell_average_and_max(self):
         z = zone(metric='dwell', classes=('car',))
-        counter = count_zones.ZoneCounter([z], now=0.0)
+        counter = make_counter([z], now=0.0)
         # Track 1: entry sample at t=0 (first inside), last seen inside at
         # t=9.9, then outside from t=10.0, exit confirmed at t=10.6 -> dwell
         # (last-inside-seen minus entry time) == 9.9s.
@@ -233,7 +247,7 @@ class DwellStatsTests(unittest.TestCase):
 class PassesCountingTests(unittest.TestCase):
     def test_passes_counts_per_class(self):
         z = zone(classes=('bicycle', 'motorcycle'), metric='passes')
-        counter = count_zones.ZoneCounter([z], now=0.0)
+        counter = make_counter([z], now=0.0)
         counter.update(0.0, [(1, 'bicycle', box_at(0.5, 0.5)), (2, 'motorcycle', box_at(0.3, 0.3))])
         counter.update(0.6, [(1, 'bicycle', box_at(0.5, 0.5)), (2, 'motorcycle', box_at(0.3, 0.3))])
         snap = {zz['id']: zz for zz in counter.snapshot(0.6)}['z1']
@@ -243,10 +257,10 @@ class PassesCountingTests(unittest.TestCase):
 
 class MidnightRolloverTests(unittest.TestCase):
     def test_rollover_resets_day_stats(self):
-        counter = count_zones.ZoneCounter([zone()])
         # 2024-01-01 23:59:00 local time.
         import datetime
         day1 = datetime.datetime(2024, 1, 1, 23, 59, 0).timestamp()
+        counter = make_counter([zone()], now=day1 - 60)
         day2_early = datetime.datetime(2024, 1, 2, 0, 0, 30).timestamp()
         counter.update(day1, [(1, 'person', box_at(0.5, 0.5))])
         counter.update(day1 + 0.6, [(1, 'person', box_at(0.5, 0.5))])
@@ -262,13 +276,13 @@ class SaveLoadTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'zones.json'
-            counter = count_zones.ZoneCounter([zone()], now=1000.0)
+            counter = make_counter([zone()], now=1000.0)
             counter.update(1000.0, [(1, 'person', box_at(0.5, 0.5))])
             counter.update(1000.6, [(1, 'person', box_at(0.5, 0.5))])
             counter.update(1001.3, [(1, 'person', box_at(0.05, 0.05))])  # exits
             counter.save(path)
 
-            reloaded = count_zones.ZoneCounter([zone()], now=1000.0)
+            reloaded = make_counter([zone()], now=1000.0)
             reloaded.load(path)
             self.assertEqual(reloaded.to_dict(), counter.to_dict())
 
@@ -277,7 +291,7 @@ class SaveLoadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'zones.json'
             path.write_text(json.dumps({"date": "2000-01-01", "zones": {"z1": {"person": {"entered": 99, "exited": 0, "dwell_count": 0, "dwell_sum": 0.0, "dwell_max": 0.0}}}}))
-            counter = count_zones.ZoneCounter([zone()], now=1_700_000_000.0)
+            counter = make_counter([zone()], now=1_700_000_000.0)
             counter.load(path)
             self.assertEqual(counter.to_dict()['zones'], {})
 
@@ -286,7 +300,7 @@ class ReconfigureKeepsStatsTests(unittest.TestCase):
     def test_unchanged_zone_id_keeps_stats_changed_id_does_not(self):
         z1 = zone(id='z1', name='Yard')
         z2 = zone(id='z2', name='Porch', classes=('dog',))
-        counter = count_zones.ZoneCounter([z1, z2], now=0.0)
+        counter = make_counter([z1, z2], now=0.0)
         counter.update(0.0, [(1, 'person', box_at(0.5, 0.5))])
         counter.update(0.6, [(1, 'person', box_at(0.5, 0.5))])
         self.assertEqual(counter.to_dict()['zones']['z1']['person']['entered'], 1)
@@ -397,3 +411,50 @@ class EditSettingsCountZonesHandlerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StartupAndResumeTests(unittest.TestCase):
+    def dwell_zone(self):
+        return zone(classes=('car',), metric='dwell')
+
+    def test_object_present_at_startup_is_timed_not_counted(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0)
+        for t in (1.0, 2.0, 30.0):
+            c.update(t, [(1, 'car', box_at(0.5, 0.5))])
+        snap = c.snapshot(30.0)[0]
+        self.assertEqual(snap['stats']['car']['entered'], 0)
+        self.assertEqual(len(snap['inside_now']), 1)
+        self.assertTrue(snap['inside_now'][0]['adopted'])
+
+    def test_arrival_after_grace_counts(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0)
+        c.update(100.0, [(1, 'car', box_at(0.5, 0.5))])
+        c.update(101.0, [(1, 'car', box_at(0.5, 0.5))])
+        self.assertEqual(c.snapshot(101.0)[0]['stats']['car']['entered'], 1)
+
+    def test_lost_and_refound_at_same_spot_is_one_stay(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c.update(10.0, [(1, 'car', box_at(0.5, 0.5))]); c.update(11.0, [(1, 'car', box_at(0.5, 0.5))])
+        c.update(100.0, [])                         # track lost (> dwell lost timeout)
+        self.assertEqual(len(c.snapshot(100.0)[0]['inside_now']), 1)   # still shown as parked
+        c.update(300.0, [(2, 'car', box_at(0.505, 0.5))]); c.update(301.0, [(2, 'car', box_at(0.505, 0.5))])
+        snap = c.snapshot(301.0)[0]
+        self.assertEqual(snap['stats']['car']['entered'], 1)
+        self.assertEqual(snap['inside_now'][0]['since'], 10.0)
+
+    def test_lost_stay_not_resumed_is_recorded_when_window_expires(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c.update(10.0, [(1, 'car', box_at(0.5, 0.5))]); c.update(70.0, [(1, 'car', box_at(0.5, 0.5))])
+        c.update(100.0, [])
+        c.update(100.0 + count_zones.RESUME_WINDOW + 80, [])
+        s = c.snapshot(3000.0)[0]
+        self.assertEqual(s['stats']['car']['exited'], 1)
+        self.assertAlmostEqual(s['stats']['car']['dwell_max'], 60.0)
+        self.assertEqual(s['inside_now'], [])
+
+    def test_different_spot_is_a_new_car(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c.update(10.0, [(1, 'car', box_at(0.4, 0.5))]); c.update(11.0, [(1, 'car', box_at(0.4, 0.5))])
+        c.update(100.0, [])
+        c.update(300.0, [(2, 'car', box_at(0.6, 0.5))]); c.update(301.0, [(2, 'car', box_at(0.6, 0.5))])
+        self.assertEqual(c.snapshot(301.0)[0]['stats']['car']['entered'], 2)

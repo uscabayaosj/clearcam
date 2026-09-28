@@ -24,6 +24,9 @@ ENTRY_HYSTERESIS = 0.5   # seconds a footpoint must be continuously inside to co
 EXIT_HYSTERESIS = 0.5    # seconds a footpoint must be continuously outside to confirm exit
 DEFAULT_LOST_TIMEOUT = 3.0    # seconds with no sighting at all -> force-close ("passes" zones)
 DWELL_LOST_TIMEOUT = 20.0     # same, but longer for "dwell" zones (a parked car briefly occluded)
+STARTUP_GRACE = 15.0          # objects already inside when counting starts are timed, not counted as entries
+RESUME_WINDOW = 1800.0        # a "dwell" object lost and re-found at the same spot within this is the same stay
+RESUME_DISTANCE = 0.04        # ...when its footpoint is within this (normalised) distance of where it was lost
 
 # A child is reported by the assist detector, not the primary one, but should
 # count as a person wherever a zone is watching for people.
@@ -158,11 +161,18 @@ class ZoneCounter:
     reset (see `_maybe_rollover`).
     """
 
-    def __init__(self, zones=None, now=None):
+    def __init__(self, zones=None, now=None, startup_grace=STARTUP_GRACE):
+        start = now if now is not None else time.time()
+        # Tracker ids start fresh whenever the engine starts, so a car parked
+        # before a restart would otherwise be counted as a second arrival.
+        self._adopt_until = start + startup_grace
+        # (zone_id, class) -> [state of a dwell stay whose track was lost,
+        # kept so the same object re-found at the same spot resumes it]
+        self._limbo = {}
         self.zones = {}
         self._stats = {}   # zone_id -> class_name -> _new_class_stats()
         self._state = {}   # (zone_id, track_id) -> dict, see update()
-        self._day = _local_date(now if now is not None else time.time())
+        self._day = _local_date(start)
         self.reconfigure(zones or [])
 
     def reconfigure(self, zones):
@@ -215,17 +225,28 @@ class ZoneCounter:
                               "last_inside_seen": None, "class_name": eff_class}
                     self._state[key] = state
                 state["last_seen"] = now
-                inside = _point_in_polygon(footpoint(box), polygon)
+                foot = footpoint(box)
+                inside = _point_in_polygon(foot, polygon)
                 if inside:
                     state["pending_exit_since"] = None
                     state["last_inside_seen"] = now
+                    state["last_foot"] = foot
                     if not state["confirmed"]:
                         if state["pending_enter_since"] is None:
                             state["pending_enter_since"] = now
                         elif now - state["pending_enter_since"] >= ENTRY_HYSTERESIS:
                             state["confirmed"] = True
                             state["entry_time"] = state["pending_enter_since"]
-                            self._class_stats(zone_id, eff_class)["entered"] += 1
+                            resumed = self._resume(zone_id, zone, eff_class, foot, now)
+                            if resumed is not None:
+                                # Same object as a stay whose track was lost: keep its
+                                # arrival time and don't count it again.
+                                state["entry_time"] = resumed["entry_time"]
+                                state["adopted"] = resumed.get("adopted", False)
+                            elif state["pending_enter_since"] < self._adopt_until:
+                                state["adopted"] = True   # was here before counting started
+                            else:
+                                self._class_stats(zone_id, eff_class)["entered"] += 1
                 else:
                     state["pending_enter_since"] = None
                     if state["confirmed"]:
@@ -245,14 +266,52 @@ class ZoneCounter:
                 continue
             state = self._state[key]
             if now - state["last_seen"] >= self._lost_timeout(zone):
-                if state["confirmed"]:
+                if state["confirmed"] and zone["metric"] == "dwell" and state.get("last_foot"):
+                    # Not closed yet: the detector may just have lost sight of it.
+                    del self._state[key]
+                    self._limbo.setdefault((zone_id, state["class_name"]), []).append(state)
+                elif state["confirmed"]:
                     self._close(zone_id, key)
                 else:
                     del self._state[key]
+        self._expire_limbo(now)
+
+    def _resume(self, zone_id, zone, class_name, foot, now):
+        """Pop and return a lost stay of this class whose last footpoint was
+        near `foot`, if one is waiting for this zone; else None."""
+        if zone["metric"] != "dwell":
+            return None
+        waiting = self._limbo.get((zone_id, class_name)) or []
+        best = None
+        for state in waiting:
+            fx, fy = state["last_foot"]
+            dist = ((fx - foot[0]) ** 2 + (fy - foot[1]) ** 2) ** 0.5
+            if dist <= RESUME_DISTANCE and (best is None or dist < best[0]):
+                best = (dist, state)
+        if best is None:
+            return None
+        waiting.remove(best[1])
+        return best[1]
+
+    def _expire_limbo(self, now):
+        """A lost stay nobody resumed within RESUME_WINDOW really ended when it
+        was last seen inside: record it then."""
+        for (zone_id, _cls), waiting in list(self._limbo.items()):
+            for state in list(waiting):
+                if now - state["last_seen"] >= RESUME_WINDOW or zone_id not in self.zones:
+                    waiting.remove(state)
+                    if zone_id in self.zones:
+                        self._record_exit(zone_id, state)
 
     def _close(self, zone_id, key):
-        state = self._state.pop(key)
+        self._record_exit(zone_id, self._state.pop(key))
+
+    def _record_exit(self, zone_id, state):
         stats = self._class_stats(zone_id, state["class_name"])
+        if state.get("adopted"):
+            # Arrived before counting started: its true stay is unknown, so it
+            # neither counts as an entry nor skews the average.
+            return
         stats["exited"] += 1
         dwell = (state["last_inside_seen"] or state["entry_time"]) - state["entry_time"]
         stats["dwell_count"] += 1
@@ -276,10 +335,17 @@ class ZoneCounter:
                     "dwell_max": stats["dwell_max"],
                 }
             inside_now = [
-                {"track_id": track_id, "class": state["class_name"], "since": state["entry_time"]}
+                {"track_id": track_id, "class": state["class_name"], "since": state["entry_time"],
+                 "adopted": bool(state.get("adopted"))}
                 for (zid, track_id), state in self._state.items()
                 if zid == zone_id and state["confirmed"]
             ]
+            # A stay whose track is momentarily lost is still there as far as
+            # anyone watching can tell (a parked car the detector blinked on).
+            for (zid, cls), waiting in self._limbo.items():
+                if zid == zone_id:
+                    inside_now += [{"track_id": None, "class": cls, "since": st["entry_time"],
+                                    "adopted": bool(st.get("adopted"))} for st in waiting]
             zones_out.append({
                 "id": zone_id, "name": zone["name"], "metric": zone["metric"],
                 "classes": list(zone["classes"]), "stats": by_class, "inside_now": inside_now,
