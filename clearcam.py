@@ -81,6 +81,7 @@ from utils import household
 from utils import summaries
 from utils import corrections
 from utils import ignore_areas as ignore_areas_mod
+from utils import count_zones as count_zones_mod
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop
 from utils.event_dedupe import RecentTriggers
@@ -397,6 +398,38 @@ def is_vod(cam_name): return (BASE_DIR / "cameras" / cam_name / "streams" / "vid
 DECODE_MAX_WIDTH = max(640, int(os.environ.get('CLEARCAM_DECODE_MAX_WIDTH', '1280')))
 
 
+def count_zones_state_path(now=None):
+    """One file per local day, holding every camera's counting-zone
+    aggregates -- see utils/count_zones.py's ZoneCounter.to_dict()/load_dict()
+    for what each camera's entry looks like."""
+    day = datetime.fromtimestamp(now if now is not None else time.time()).strftime('%Y-%m-%d')
+    return BASE_DIR / "count_zones" / f"{day}.json"
+
+
+def load_count_zones_file():
+    """{cam_name: ZoneCounter.to_dict()-shaped payload} for today, or {} if
+    there is nothing saved yet (first run, or a fresh day)."""
+    path = count_zones_state_path()
+    if not path.is_file(): return {}
+    try:
+        data = json.loads(path.read_text())
+    except (ValueError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_count_zones_file(cam):
+    """Today's aggregates for every camera, in one file -- called about once
+    a minute and on shutdown (see VideoCapture.start/__main__)."""
+    payload = {name: counter.to_dict() for name, counter in cam.count_zones.items()}
+    path = count_zones_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    except OSError as e:
+        print("Could not save count_zones state:", e)
+
+
 def detection_size(width, height):
   """Decode size for detection: the model sees 640 px, so a 2304-wide native
   frame is pure pipe traffic (9 MB per frame). Bounding the decode at 1280
@@ -456,6 +489,11 @@ class VideoCapture:
     # run_inference doesn't re-parse JSON every frame; refreshed alongside
     # self.settings whenever settings change (see process_frame).
     self.ignore_areas = {}
+    # per camera: a utils.count_zones.ZoneCounter fed straight after the
+    # tracker in run_inference; rebuilt (config only, stats kept) alongside
+    # self.settings whenever settings change (see process_frame).
+    self.count_zones = {}
+    self.last_count_zones_save = 0.0
     self.count = {}
     self.prev_time = {}
     self.current_stream_dir_raw = {}
@@ -511,6 +549,8 @@ class VideoCapture:
     self.width[cam_name], self.height[cam_name] = detection_size(*_get_stream_resolution(src))
     self.settings[cam_name] = None
     self.ignore_areas[cam_name] = []
+    self.count_zones[cam_name] = count_zones_mod.ZoneCounter()
+    self.count_zones[cam_name].load_dict(load_count_zones_file().get(cam_name))
     self.start_time[cam_name] = None
     
     self.alert_counters[cam_name] = database.run_get("alerts",cam_name)
@@ -550,6 +590,9 @@ class VideoCapture:
         run_summary_if_due()
         if self.record_video: local_descriptions.backfill_if_idle(BASE_DIR / 'cameras')
         self.maybe_caption_scene()
+        if time.time() - self.last_count_zones_save >= 60:
+          self.last_count_zones_save = time.time()
+          save_count_zones_file(self)
         new_cams = camera_sources()
         for cam_name in new_cams.keys():
           if type(new_cams[cam_name]) != str: continue # todo find cause
@@ -1063,6 +1106,11 @@ class VideoCapture:
                 self.ignore_areas[cam_name] = ignore_areas_mod.parse_areas((new_settings or {}).get("ignore_areas"), class_labels)
               except ValueError as e:
                 print("Invalid stored ignore_areas for", cam_name, ":", e)
+              try:
+                self.count_zones[cam_name].reconfigure(
+                  count_zones_mod.parse_zones((new_settings or {}).get("count_zones"), class_labels))
+              except ValueError as e:
+                print("Invalid stored count_zones for", cam_name, ":", e)
             self.settings[cam_name] = new_settings
               
           if global_settings.userID and not self.vod[cam_name] and cam_name in self.live_link and (link:=self.live_link[cam_name]) and (time.time() - self.last_live_seg[cam_name]) >= 4:
@@ -1134,6 +1182,17 @@ class VideoCapture:
     # out-of-zone objects: the live view shows a parked car or a sleeping
     # person even though alerts (rightly) ignore them.
     self.live_boxes[cam_name] = (time.time(), np.array([[t.tlwh[0], t.tlwh[1], t.tlwh[0]+t.tlwh[2], t.tlwh[1]+t.tlwh[3], t.score, t.class_id, t.track_id] for t in online_targets if t.tracklet_len >= 1], dtype=np.float32).reshape(-1, 7))
+    # Counting zones: every confirmed track (same set as live_boxes, before
+    # the alert-only class/zone filters below), normalised to 0-1 so zone
+    # polygons -- stored normalised, like ignore_areas -- don't care about
+    # frame size.
+    zone_tracks = (
+      (int(t.track_id),
+       class_labels[int(t.class_id)] if int(t.class_id) < len(class_labels) else str(int(t.class_id)),
+       (t.tlwh[0] / orig_w, t.tlwh[1] / orig_h, (t.tlwh[0] + t.tlwh[2]) / orig_w, (t.tlwh[1] + t.tlwh[3]) / orig_h))
+      for t in online_targets if t.tracklet_len >= 1
+    )
+    self.count_zones[cam_name].update(time.time(), zone_tracks)
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
     preds = []
     for x in online_targets:
@@ -1578,6 +1637,13 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             counts = live_counts_for_cam(cam, name, now)
             live = cam.live_boxes.get(name)
             scene = cam.scene.get(name, {})
+            zones = []
+            counter = cam.count_zones.get(name)
+            if counter is not None:
+              for zone in counter.snapshot(now):
+                for entry in zone["inside_now"]:
+                  entry["seconds"] = round(now - entry["since"], 1) if entry["since"] is not None else 0
+                zones.append(zone)
             cameras[name] = {
               "counts": counts,
               "total": sum(counts.values()),
@@ -1585,8 +1651,13 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               "caption": scene.get('caption'),
               "caption_at": scene.get('caption_at'),
               "caption_state": scene.get('caption_state', 'idle'),
+              "zones": zones,
             }
-          self.send_200({"cameras": cameras})
+          # stroller only exists as a class once the vehicle-assist model is
+          # loaded (see make_assist_detector); every other class here comes
+          # from the primary detector regardless.
+          detectable = [c for c in class_labels if not (c.lower() == 'stroller' and assist_model is None)]
+          self.send_200({"cameras": cameras, "detectable": detectable})
           return
 
         if parsed_path.path == "/vendor/hls.min.js":
@@ -1670,6 +1741,18 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 ]
               elif "ignore_areas" in zone:
                 del zone["ignore_areas"]
+            count_zones_json = query.get("count_zones", [None])[0]
+            if count_zones_json is not None:
+              try:
+                raw_zones = json.loads(count_zones_json)
+                parsed_zones = count_zones_mod.parse_zones(raw_zones, class_labels)
+              except (ValueError, TypeError, json.JSONDecodeError) as e:
+                self.send_refusal(f"Invalid count zones: {e}")
+                return
+              if parsed_zones:
+                zone["count_zones"] = parsed_zones
+              elif "count_zones" in zone:
+                del zone["count_zones"]
             database.run_put("settings", cam_name, zone) # todo, key for each
             if (url := query.get("url")) is not None: database.run_put("links", cam_name, keychain.store(cam_name, url[0]))
 
@@ -1685,6 +1768,14 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 return
             zone = database.run_get("settings", cam_name)
             self.send_200((zone or {}).get("ignore_areas", []))
+            return
+
+        if parsed_path.path == "/count_zones":
+            if not cam_name:
+                self.send_error(400, "Missing cam parameter")
+                return
+            zone = database.run_get("settings", cam_name)
+            self.send_200((zone or {}).get("count_zones", []))
             return
 
         if parsed_path.path == "/edit_alert":
@@ -2714,6 +2805,7 @@ if __name__ == "__main__":
     print("Stopping local camera engine")
   finally:
     cam.stopping.set()
+    save_count_zones_file(cam)
     with cam.restart_lock:
       for name in set(cam.proc) | set(cam.hls_proc):
         cam._safe_kill_process(cam.proc.get(name))

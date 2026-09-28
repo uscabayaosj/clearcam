@@ -198,6 +198,22 @@
     #multiView.active { display: grid; gap: 10px; margin-top: 22px; padding: 10px; border-radius: var(--r-panel); background: var(--ink-deep); box-shadow: inset 0 0 0 1px var(--line); }
     #multiView .video-wrapper { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #060a0b; }
 
+    /* ---------- Counters (counting-zone stats) ---------- */
+    .counters-section { margin-bottom: 34px; }
+    .counters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; }
+    .counter-card {
+      min-width: 0; padding: 14px 16px; border-radius: var(--r-panel); background: var(--ink-panel);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+    .counter-card h3 { font-size: .92rem; font-weight: 600; margin: 0 0 10px; color: var(--paper); }
+    .counter-zones { display: flex; flex-direction: column; gap: 10px; }
+    .counter-zone { min-width: 0; }
+    .counter-zone h4 { font-size: .76rem; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--paper-dim); margin: 0 0 4px; }
+    .counter-line { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+    .counter-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; background: var(--ink-soft); color: var(--paper-muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+    .counter-chip.counter-chip-undetected { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--paper-dim); font-style: italic; }
+    .counter-now { margin: 4px 0 0; color: var(--paper-dim); font-size: .82rem; font-variant-numeric: tabular-nums; }
+
     /* ---------- Journal + ledger ---------- */
     .observatory-grid { display: grid; grid-template-columns: minmax(0, 1fr) 296px; gap: 28px; align-items: start; }
     .events-section {
@@ -446,6 +462,18 @@
 
     /* Ignore areas: rectangles where nothing is ever detected */
     .zone-stage #ignoreAreaOverlay { position: absolute; inset: 0; pointer-events: none; }
+    .zone-stage #countZoneOverlay { position: absolute; inset: 0; pointer-events: none; }
+    .count-zone-item {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line-strong);
+    }
+    .count-zone-item:first-child { border-top: 0; }
+    .count-zone-name { min-width: 140px; flex: 1 1 160px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--r-control); background: transparent; color: var(--paper); font-size: .86rem; }
+    .count-zone-metric { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r-control); overflow: hidden; }
+    .count-zone-metric button { padding: 6px 10px; border: 0; background: transparent; color: var(--paper-muted); font-size: .8rem; }
+    .count-zone-metric button.is-active { background: var(--sage-strong); color: var(--ink); }
+    .count-zone-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 200px; }
+    .count-zone-remove { flex: 0 0 auto; }
+    .count-zone-empty { padding: 10px 0; color: var(--paper-dim); font-size: .86rem; }
     .ignore-area-box {
       position: absolute; border: 2px dashed var(--brass); border-radius: 6px;
       background: rgba(231, 179, 93, .16); pointer-events: none;
@@ -567,6 +595,13 @@
         <button type="button" onclick="toggleMultiView()">Multi View</button>
       </div>
 
+      <section class="counters-section" id="countersSection" aria-labelledby="counters-heading" hidden>
+        <div class="section-heading">
+          <h2 id="counters-heading">Counters</h2>
+        </div>
+        <div class="counters-grid" id="countersContainer" aria-live="off"></div>
+      </section>
+
       <div class="observatory-grid">
         <section class="events-section" aria-labelledby="journal-heading">
           <div class="journal-heading">
@@ -658,6 +693,7 @@
             <img id="zonePreview" alt="Latest frame from this camera; click to draw a detection zone">
             <div id="polygonOverlay"></div>
             <div id="ignoreAreaOverlay"></div>
+            <div id="countZoneOverlay"></div>
         </div>
         <p class="zone-hint">Click on the image to draw a detection zone. Zone drawing needs a mouse or trackpad; the settings below work with the keyboard.</p>
         <div class="zone-fields">
@@ -677,6 +713,14 @@
             <button type="button" class="secondary-action" id="drawIgnoreAreaBtn" onclick="startDrawIgnoreArea()" aria-describedby="ignoreAreaHint">Draw ignore area</button>
             <span id="ignoreAreaHint" class="visually-hidden">Drag a rectangle on the image above to mark an area to ignore.</span>
             <ul class="ignore-area-list" id="ignoreAreaList" aria-label="Ignore areas for this camera"></ul>
+        </div>
+        <div class="ignore-areas-section">
+            <h4 class="ignore-areas-heading">Counting zones</h4>
+            <p class="zone-hint">Counting zones — draw a polygon and ClearCam counts tracked objects going in and out of it, and how long they stay, for the day. Only numbers are kept, never images.</p>
+            <button type="button" class="secondary-action" id="drawCountZoneBtn" onclick="startDrawCountZone()" aria-describedby="countZoneHint">Draw counting zone</button>
+            <button type="button" class="secondary-action" id="finishCountZoneBtn" onclick="countZoneDraw &amp;&amp; countZoneDraw.finish()" hidden>Finish</button>
+            <span id="countZoneHint" class="visually-hidden">Click to place each point of the zone; click the first point again, or press Enter, to finish. Escape cancels; Backspace removes the last point.</span>
+            <ul class="ignore-area-list" id="countZoneList" aria-label="Counting zones for this camera"></ul>
         </div>
         <div class="form-actions zone-actions">
             <button type="button" class="zone-clear" onclick="clearPolygon()">Clear Zone</button>
@@ -1888,10 +1932,16 @@
         zoneModal.style.display = "flex";
         initZoneEditor();
         resetIgnoreAreaEditor();
+        resetCountZoneEditor();
         fetch(`/get_settings?cam=${encodeURIComponent(cameraName)}`)
             .then(res => res.json())
             .then(data => {
                 console.log("Received settings data:", data);
+                countZonesState = (Array.isArray(data && data.count_zones) ? data.count_zones : []).map(z => ({
+                    id: z.id, name: z.name, polygon: (z.polygon || []).map(p => [p[0], p[1]]),
+                    classes: Array.isArray(z.classes) ? z.classes.slice() : [], metric: z.metric === 'dwell' ? 'dwell' : 'passes'
+                }));
+                renderCountZoneList();
                 ignoreAreasState = (Array.isArray(data && data.ignore_areas) ? data.ignore_areas : []).map(a => ({
                     box: a.box, classes: Array.isArray(a.classes) ? a.classes.slice() : []
                 }));
@@ -1949,6 +1999,7 @@
             isPolygonComplete: false
         };
         resetIgnoreAreaEditor();
+        resetCountZoneEditor();
     }
 
     // ---------- Ignore areas: rectangles where nothing is ever detected ----------
@@ -2096,6 +2147,223 @@
         });
     }
 
+    // ---------- Counting zones: named polygons that count tracked objects ----------
+    // Click-to-place-points drawing (like the alert zone above), but several
+    // named zones can coexist, each scoped to a few classes and a metric
+    // ("passes" or "dwell"). Saved through the same saveZone()/edit_settings
+    // path as the alert zone and ignore areas.
+    const COUNT_ZONE_CLASS_NAMES = ['person', 'bicycle', 'motorcycle', 'car', 'truck', 'dog', 'stroller'];
+    let countZonesState = [];
+    let countZoneDraw = null;
+
+    function resetCountZoneEditor() {
+        if (countZoneDraw) { countZoneDraw.cleanup(); countZoneDraw = null; }
+        countZonesState = [];
+        renderCountZoneList();
+    }
+
+    function newCountZoneId() {
+        return 'zone-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+    }
+
+    function countZonePolygonSvg(polygons, activeIndex) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 1 1');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.setAttribute('style', 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;');
+        polygons.forEach((points, index) => {
+            if (points.length < 2) return;
+            const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            poly.setAttribute('points', points.map(([x, y]) => `${x},${y}`).join(' '));
+            const active = index === activeIndex;
+            poly.setAttribute('fill', active ? 'rgba(255, 204, 0, .28)' : 'rgba(148, 197, 172, .22)');
+            poly.setAttribute('stroke', active ? '#ffcc00' : '#94c5ac');
+            poly.setAttribute('stroke-width', '0.004');
+            poly.setAttribute('vector-effect', 'non-scaling-stroke');
+            svg.appendChild(poly);
+        });
+        return svg;
+    }
+
+    function startDrawCountZone() {
+        const previewEl = document.getElementById('zonePreview');
+        const drawBtn = document.getElementById('drawCountZoneBtn');
+        const finishBtn = document.getElementById('finishCountZoneBtn');
+        if (countZoneDraw) return; // already drawing
+        previewEl.removeEventListener('click', handlePreviewClick);
+        previewEl.style.cursor = 'crosshair';
+        drawBtn.disabled = true;
+        finishBtn.hidden = false;
+        announce('Click to place points for the new counting zone. Click the first point again, or press Enter, to finish; Escape cancels; Backspace removes the last point.');
+
+        const points = [];
+        const dots = [];
+        const overlay = document.getElementById('countZoneOverlay');
+
+        function redraw() {
+            renderCountZoneList(); // existing zones, unaffected
+            overlay.appendChild(countZonePolygonSvg([points], 0));
+            const rect = previewEl.getBoundingClientRect();
+            points.forEach(([x, y], i) => {
+                const dot = document.createElement('div');
+                dot.className = 'polygon-point';
+                dot.style.position = 'absolute';
+                dot.style.left = (x * rect.width - 6) + 'px';
+                dot.style.top = (y * rect.height - 6) + 'px';
+                dot.style.width = '12px'; dot.style.height = '12px'; dot.style.borderRadius = '50%';
+                dot.style.background = i === 0 ? '#0000ff' : '#ffcc00';
+                dot.style.border = '2px solid #ffffff'; dot.style.zIndex = '20';
+                dot.style.cursor = i === 0 ? 'pointer' : 'default';
+                dot.style.pointerEvents = 'auto';
+                if (i === 0) dot.addEventListener('click', (e) => { e.stopPropagation(); finish(); });
+                overlay.appendChild(dot);
+                dots.push(dot);
+            });
+        }
+        function onClick(e) {
+            const rect = previewEl.getBoundingClientRect();
+            const x = clampUnit((e.clientX - rect.left) / rect.width);
+            const y = clampUnit((e.clientY - rect.top) / rect.height);
+            points.push([x, y]);
+            redraw();
+        }
+        function removeLast() {
+            if (!points.length) return;
+            points.pop();
+            redraw();
+        }
+        function finish() {
+            if (points.length < count_zones_min_points()) {
+                announce(`A counting zone needs at least ${count_zones_min_points()} points.`, true);
+                return;
+            }
+            countZonesState.push({ id: newCountZoneId(), name: `Zone ${countZonesState.length + 1}`, polygon: points.slice(), classes: [], metric: 'passes' });
+            cleanup();
+            renderCountZoneList();
+            announce('Counting zone added. Name it and choose which classes and metric it uses.');
+        }
+        function cancel() { cleanup(); announce('Counting zone drawing cancelled.', true); }
+        function onKey(e) {
+            if (e.key === 'Enter') { e.preventDefault(); finish(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+            else if (e.key === 'Backspace') { e.preventDefault(); removeLast(); }
+        }
+        function cleanup() {
+            previewEl.removeEventListener('click', onClick);
+            document.removeEventListener('keydown', onKey);
+            previewEl.style.cursor = 'crosshair';
+            drawBtn.disabled = false;
+            finishBtn.hidden = true;
+            previewEl.addEventListener('click', handlePreviewClick);
+            countZoneDraw = null;
+            renderCountZoneList();
+        }
+        countZoneDraw = { cleanup, finish, cancel, removeLast };
+        previewEl.addEventListener('click', onClick);
+        document.addEventListener('keydown', onKey);
+        redraw();
+    }
+    function count_zones_min_points() { return 3; }
+
+    function removeCountZone(index) {
+        countZonesState.splice(index, 1);
+        renderCountZoneList();
+    }
+
+    function toggleCountZoneClass(index, className) {
+        const zone = countZonesState[index];
+        if (!zone) return;
+        const at = zone.classes.indexOf(className);
+        if (at === -1) zone.classes.push(className); else zone.classes.splice(at, 1);
+        renderCountZoneList();
+    }
+
+    function setCountZoneName(index, name) {
+        const zone = countZonesState[index];
+        if (zone) zone.name = name;
+    }
+
+    function setCountZoneMetric(index, metric) {
+        const zone = countZonesState[index];
+        if (!zone) return;
+        zone.metric = metric;
+        renderCountZoneList();
+    }
+
+    function renderCountZoneList() {
+        const overlay = document.getElementById('countZoneOverlay');
+        const list = document.getElementById('countZoneList');
+        if (!overlay || !list) return;
+        overlay.innerHTML = '';
+        list.innerHTML = '';
+        overlay.appendChild(countZonePolygonSvg(countZonesState.map(z => z.polygon), -1));
+        if (!countZonesState.length) {
+            const empty = document.createElement('p');
+            empty.className = 'count-zone-empty';
+            empty.textContent = 'No counting zones yet.';
+            list.appendChild(empty);
+            return;
+        }
+        countZonesState.forEach((zone, index) => {
+            const item = document.createElement('li');
+            item.className = 'count-zone-item';
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.className = 'count-zone-name';
+            nameInput.value = zone.name;
+            nameInput.maxLength = 40;
+            nameInput.setAttribute('aria-label', `Name for counting zone ${index + 1}`);
+            nameInput.addEventListener('input', () => setCountZoneName(index, nameInput.value));
+            item.appendChild(nameInput);
+
+            const chips = document.createElement('div');
+            chips.className = 'count-zone-chips';
+            chips.setAttribute('role', 'group');
+            chips.setAttribute('aria-label', `Classes counted in ${zone.name || 'this zone'}`);
+            COUNT_ZONE_CLASS_NAMES.forEach(name => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'ignore-area-chip' + (zone.classes.includes(name) ? ' is-active' : '');
+                chip.textContent = name;
+                chip.setAttribute('aria-pressed', String(zone.classes.includes(name)));
+                chip.addEventListener('click', () => toggleCountZoneClass(index, name));
+                chips.appendChild(chip);
+            });
+            item.appendChild(chips);
+
+            const metric = document.createElement('div');
+            metric.className = 'count-zone-metric';
+            metric.setAttribute('role', 'group');
+            metric.setAttribute('aria-label', `How ${zone.name || 'this zone'} counts`);
+            const passesBtn = document.createElement('button');
+            passesBtn.type = 'button';
+            passesBtn.textContent = 'Count passes';
+            passesBtn.className = zone.metric === 'passes' ? 'is-active' : '';
+            passesBtn.setAttribute('aria-pressed', String(zone.metric === 'passes'));
+            passesBtn.addEventListener('click', () => setCountZoneMetric(index, 'passes'));
+            const dwellBtn = document.createElement('button');
+            dwellBtn.type = 'button';
+            dwellBtn.textContent = 'Time inside';
+            dwellBtn.className = zone.metric === 'dwell' ? 'is-active' : '';
+            dwellBtn.setAttribute('aria-pressed', String(zone.metric === 'dwell'));
+            dwellBtn.addEventListener('click', () => setCountZoneMetric(index, 'dwell'));
+            metric.appendChild(passesBtn);
+            metric.appendChild(dwellBtn);
+            item.appendChild(metric);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'ignore-area-remove count-zone-remove';
+            remove.setAttribute('aria-label', `Remove counting zone ${index + 1}`);
+            remove.textContent = '×';
+            remove.addEventListener('click', () => removeCountZone(index));
+            item.appendChild(remove);
+
+            list.appendChild(item);
+        });
+    }
+
     async function loadFeatureFlags() {
       await ensureLiveMode();
       const searchRowEl = document.getElementById('journalSearch');
@@ -2193,6 +2461,14 @@
           }
           params.set('ignore_areas', JSON.stringify(ignoreAreasState.map(a => ({
               box: a.box, classes: (a.classes && a.classes.length) ? a.classes : undefined
+          }))));
+          const zoneMissingClasses = countZonesState.findIndex(z => !z.classes.length);
+          if (zoneMissingClasses !== -1) {
+              announce(`Choose at least one class for "${countZonesState[zoneMissingClasses].name || 'counting zone ' + (zoneMissingClasses + 1)}" before saving.`, true);
+              return;
+          }
+          params.set('count_zones', JSON.stringify(countZonesState.map(z => ({
+              id: z.id, name: z.name, polygon: z.polygon, classes: z.classes, metric: z.metric
           }))));
 
           fetch(`/edit_settings?${params.toString()}`)
@@ -4030,6 +4306,89 @@
         captionEl.textContent = '';
       }
     }
+    // ---------- Counters: today's counting-zone stats, from /live_scene ----------
+    // No separate polling endpoint -- the web view has a small per-host
+    // connection budget (see how often /live_scene itself is already polled
+    // below), so this rides along with the scene payload that's fetched anyway.
+    function formatDuration(seconds) {
+      seconds = Math.max(0, Math.round(seconds || 0));
+      if (seconds < 60) return `${seconds}s`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+      const hours = Math.floor(minutes / 60);
+      return `${hours}h ${minutes % 60}m`;
+    }
+    function counterClassLabel(name) {
+      const plural = name.endsWith('s') ? name : name + 's';
+      return plural.charAt(0).toUpperCase() + plural.slice(1);
+    }
+    function renderCounterZone(zone, detectableSet) {
+      const el = document.createElement('div');
+      el.className = 'counter-zone';
+      el.setAttribute('aria-live', 'off');
+      const title = document.createElement('h4');
+      title.textContent = zone.name;
+      el.appendChild(title);
+      const line = document.createElement('p');
+      line.className = 'counter-line';
+      const classes = zone.classes || [];
+      const stats = zone.stats || {};
+      classes.forEach(cls => {
+        const chip = document.createElement('span');
+        if (!detectableSet.has(cls)) {
+          chip.className = 'counter-chip counter-chip-undetected';
+          chip.textContent = `${counterClassLabel(cls)} — not detected by the current model`;
+        } else if (zone.metric === 'dwell') {
+          const s = stats[cls] || { entered: 0, dwell_count: 0, dwell_avg: 0, dwell_max: 0 };
+          chip.className = 'counter-chip';
+          const avg = s.dwell_count ? formatDuration(s.dwell_avg) : '—';
+          const max = s.dwell_count ? formatDuration(s.dwell_max) : '—';
+          chip.textContent = `${counterClassLabel(cls)}: ${s.entered} entered · avg ${avg} · longest ${max}`;
+        } else {
+          const s = stats[cls] || { entered: 0 };
+          chip.className = 'counter-chip';
+          chip.textContent = `${counterClassLabel(cls)} ${s.entered}`;
+        }
+        line.appendChild(chip);
+      });
+      el.appendChild(line);
+      if (zone.metric === 'dwell') {
+        const now = document.createElement('p');
+        now.className = 'counter-now';
+        const insideNow = zone.inside_now || [];
+        if (insideNow.length) {
+          const longest = Math.max(...insideNow.map(t => t.seconds || 0));
+          now.textContent = `Now: ${insideNow.length} inside (${formatDuration(longest)})`;
+        } else {
+          now.textContent = 'Now: none inside';
+        }
+        el.appendChild(now);
+      }
+      return el;
+    }
+    function renderCounters(cameras, detectable) {
+      const section = document.getElementById('countersSection');
+      const container = document.getElementById('countersContainer');
+      if (!section || !container) return;
+      const detectableSet = new Set((detectable || []).map(c => c.toLowerCase()));
+      const camNames = Object.keys(cameras || {}).filter(name => (cameras[name].zones || []).length);
+      if (!camNames.length) { section.hidden = true; container.innerHTML = ''; return; }
+      section.hidden = false;
+      container.innerHTML = '';
+      camNames.forEach(name => {
+        const card = document.createElement('div');
+        card.className = 'counter-card';
+        const heading = document.createElement('h3');
+        heading.textContent = name;
+        card.appendChild(heading);
+        const zonesWrap = document.createElement('div');
+        zonesWrap.className = 'counter-zones';
+        (cameras[name].zones || []).forEach(zone => zonesWrap.appendChild(renderCounterZone(zone, detectableSet)));
+        card.appendChild(zonesWrap);
+        container.appendChild(card);
+      });
+    }
+
     async function fetchLiveScene() {
       try {
         const res = await fetch('/live_scene');
@@ -4037,6 +4396,7 @@
         const data = await res.json();
         const cams = (data && data.cameras) || {};
         Object.entries(cams).forEach(([camName, scene]) => updateSceneUI(camName, scene));
+        renderCounters(cams, data && data.detectable);
       } catch (_) { /* keep last rendered scene until the next poll succeeds */ }
     }
     fetchLiveScene();
