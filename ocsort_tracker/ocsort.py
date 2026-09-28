@@ -160,6 +160,36 @@ class KalmanBoxTracker(object):
         """
         return convert_x_to_bbox(self.kf.x)
 
+
+def distance_associate(dets, det_classes, trk_boxes, trk_classes, trk_misses,
+                       max_jump=2.0, max_size_ratio=2.0, max_misses=3):
+    """Pair leftover detections with leftover tracks by centre distance.
+
+    dets/trk_boxes: N x >=4 arrays of x1, y1, x2, y2. A pair qualifies when
+    the classes match, the boxes are within max_size_ratio of each other in
+    size, the track was seen within max_misses detections, and the centres
+    are at most max_jump box diagonals apart. Returns [(det_index, trk_index)],
+    nearest first, each index used once.
+    """
+    pairs = []
+    for i, d in enumerate(dets):
+        dw, dh = d[2] - d[0], d[3] - d[1]
+        if dw <= 0 or dh <= 0: continue
+        for j, t in enumerate(trk_boxes):
+            if t[:4].sum() < 0 or trk_misses[j] > max_misses or det_classes[i] != trk_classes[j]: continue
+            tw, th = t[2] - t[0], t[3] - t[1]
+            if tw <= 0 or th <= 0: continue
+            if max(dw * dh, tw * th) > max_size_ratio ** 2 * min(dw * dh, tw * th): continue
+            diag = max(np.hypot(dw, dh), np.hypot(tw, th))
+            jump = np.hypot((d[0] + d[2] - t[0] - t[2]) / 2, (d[1] + d[3] - t[1] - t[3]) / 2) / diag
+            if jump <= max_jump: pairs.append((jump, i, j))
+    used_d, used_t, out = set(), set(), []
+    for _jump, i, j in sorted(pairs):
+        if i in used_d or j in used_t: continue
+        used_d.add(i); used_t.add(j); out.append((i, j))
+    return out
+
+
 class OCSort(object):
     def __init__(self, det_thresh=0.25, max_age=30, min_hits=3, 
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False):
@@ -274,6 +304,31 @@ class OCSort(object):
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_dets = np.setdiff1d(unmatched_dets, np.array(to_remove_det_indices))
                 unmatched_trks = np.setdiff1d(unmatched_trks, np.array(to_remove_trk_indices))
+
+        # Third round, by distance: a fast object (a bike crossing the frame
+        # in a couple of seconds) moves further than half its own width
+        # between detections, so its boxes stop overlapping. A young track
+        # has no velocity yet to predict the jump, so IoU matching never
+        # links it and the object is dropped as a string of one-frame tracks.
+        # Link leftovers that are the same class, a similar size and within
+        # a couple of box lengths of the track's last sighting.
+        if unmatched_dets.shape[0] > 0 and unmatched_trks.shape[0] > 0:
+            rematched = distance_associate(dets[unmatched_dets], class_ids[unmatched_dets],
+                                           # a brand-new track has only a placeholder as its last
+                                           # observation; fall back to its predicted box
+                                           np.array([last_boxes[t][:4] if last_boxes[t][:4].sum() >= 0 else trks[t][:4]
+                                                     for t in unmatched_trks]),
+                                           np.array([self.trackers[t].class_id for t in unmatched_trks]),
+                                           np.array([self.trackers[t].time_since_update for t in unmatched_trks]))
+            if rematched:
+                used_dets, used_trks = [], []
+                for d, t in rematched:
+                    det_ind, trk_ind = unmatched_dets[d], unmatched_trks[t]
+                    self.trackers[trk_ind].update(dets[det_ind, :], scores[det_ind], class_ids[det_ind])
+                    used_dets.append(det_ind)
+                    used_trks.append(trk_ind)
+                unmatched_dets = np.setdiff1d(unmatched_dets, np.array(used_dets))
+                unmatched_trks = np.setdiff1d(unmatched_trks, np.array(used_trks))
 
         for m in unmatched_trks:
             self.trackers[m].update(None)
