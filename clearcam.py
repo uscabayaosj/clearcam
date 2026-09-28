@@ -59,6 +59,7 @@ from utils import keychain
 from utils import household
 from utils import summaries
 from utils import corrections
+from utils import ignore_areas as ignore_areas_mod
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop
 from utils.event_dedupe import RecentTriggers
@@ -430,6 +431,10 @@ class VideoCapture:
     self.last_frames = {}
 
     self.settings = {}
+    # per camera: parsed/validated ignore_areas from self.settings, cached so
+    # run_inference doesn't re-parse JSON every frame; refreshed alongside
+    # self.settings whenever settings change (see process_frame).
+    self.ignore_areas = {}
     self.count = {}
     self.prev_time = {}
     self.current_stream_dir_raw = {}
@@ -484,6 +489,7 @@ class VideoCapture:
     self.raw_frame[cam_name] = None
     self.width[cam_name], self.height[cam_name] = detection_size(*_get_stream_resolution(src))
     self.settings[cam_name] = None
+    self.ignore_areas[cam_name] = []
     self.start_time[cam_name] = None
     
     self.alert_counters[cam_name] = database.run_get("alerts",cam_name)
@@ -1031,6 +1037,11 @@ class VideoCapture:
             if self.settings[cam_name] is not None and new_settings != self.settings[cam_name] and is_vod(cam_name):
               self.reset_vod(cam_name)
               if "reset" in new_settings: del new_settings["reset"]
+            if new_settings != self.settings[cam_name]:
+              try:
+                self.ignore_areas[cam_name] = ignore_areas_mod.parse_areas((new_settings or {}).get("ignore_areas"), class_labels)
+              except ValueError as e:
+                print("Invalid stored ignore_areas for", cam_name, ":", e)
             self.settings[cam_name] = new_settings
               
           if global_settings.userID and not self.vod[cam_name] and cam_name in self.live_link and (link:=self.live_link[cam_name]) and (time.time() - self.last_live_seg[cam_name]) >= 4:
@@ -1077,11 +1088,19 @@ class VideoCapture:
 
   def run_inference(self, frame, cam_name):
     global model
+    orig_h, orig_w = frame.shape[0], frame.shape[1]
     if getattr(model, 'kind', None) == 'coreml':
       preds = model(frame)  # numpy in, numpy out; runs on the Neural Engine
     else:
       frame = Tensor(frame)
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
+    # Ignore areas: drop detections (e.g. a bin the model keeps calling a car)
+    # right here, before the tracker ever sees them, so live view, counts,
+    # scene descriptions and alerts are all unaffected -- as if the detector
+    # never looked there.
+    areas = self.ignore_areas.get(cam_name)
+    if areas:
+      preds = ignore_areas_mod.filter_preds(preds, areas, orig_w, orig_h, class_labels)
     thresh = (self.settings[cam_name].get("threshold") if self.settings[cam_name] else 0.5) or 0.5 #todo clean!
     online_targets = self.tracker[cam_name].update(preds, thresh)
     # Every confirmed track, before the alert filters below drop stationary or
@@ -1608,7 +1627,22 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                   if "coords" in zone: del zone["coords"]
             zone["is_notif"] = (str(is_notif).lower() == "true") if (is_notif := query.get("is_notif", [None])[0]) is not None else zone.get("is_notif")
             zone["outside"] = (str(outside).lower() == "true") if (outside := query.get("outside", [None])[0]) is not None else zone.get("outside")
-            query.get("threshold", [None])[0] is not None and zone.update({"threshold": float(query.get("threshold", [None])[0])}) #need the val  
+            query.get("threshold", [None])[0] is not None and zone.update({"threshold": float(query.get("threshold", [None])[0])}) #need the val
+            ignore_areas_json = query.get("ignore_areas", [None])[0]
+            if ignore_areas_json is not None:
+              try:
+                raw_areas = json.loads(ignore_areas_json)
+                parsed_areas = ignore_areas_mod.parse_areas(raw_areas, class_labels)
+              except (ValueError, TypeError, json.JSONDecodeError) as e:
+                self.send_refusal(f"Invalid ignore areas: {e}")
+                return
+              if parsed_areas:
+                zone["ignore_areas"] = [
+                  ({"box": a["box"], "classes": sorted(a["classes"])} if a["classes"] else {"box": a["box"]})
+                  for a in parsed_areas
+                ]
+              elif "ignore_areas" in zone:
+                del zone["ignore_areas"]
             database.run_put("settings", cam_name, zone) # todo, key for each
             if (url := query.get("url")) is not None: database.run_put("links", cam_name, keychain.store(cam_name, url[0]))
 
@@ -1616,6 +1650,14 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+            return
+
+        if parsed_path.path == "/get_ignore_areas":
+            if not cam_name:
+                self.send_error(400, "Missing cam parameter")
+                return
+            zone = database.run_get("settings", cam_name)
+            self.send_200((zone or {}).get("ignore_areas", []))
             return
 
         if parsed_path.path == "/edit_alert":

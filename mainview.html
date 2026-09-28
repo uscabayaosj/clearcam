@@ -439,6 +439,36 @@
     .zone-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
     .zone-actions-spacer { flex: 1; }
 
+    /* Ignore areas: rectangles where nothing is ever detected */
+    .zone-stage #ignoreAreaOverlay { position: absolute; inset: 0; pointer-events: none; }
+    .ignore-area-box {
+      position: absolute; border: 2px dashed var(--brass); border-radius: 6px;
+      background: rgba(231, 179, 93, .16); pointer-events: none;
+    }
+    .ignore-area-box.is-drawing { border-style: solid; background: rgba(231, 179, 93, .24); }
+    .ignore-areas-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .ignore-areas-heading { font-size: .92rem; font-weight: 600; margin-bottom: 4px; }
+    .ignore-area-list { list-style: none; display: grid; gap: 8px; margin: 14px 0 0; padding: 0; }
+    .ignore-area-item {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px;
+      border: 1px solid var(--line); border-radius: var(--r-control); background: var(--ink-soft);
+    }
+    .ignore-area-item .ignore-area-label { font-size: .84rem; font-weight: 600; color: var(--paper-muted); flex: 0 0 auto; }
+    .ignore-area-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 160px; }
+    .ignore-area-chip {
+      min-height: 30px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px;
+      background: transparent; color: var(--paper-muted); font-size: .78rem; font-weight: 500;
+      transition: background .16s var(--ease-out), color .16s var(--ease-out), border-color .16s var(--ease-out);
+    }
+    .ignore-area-chip:hover { border-color: var(--paper-dim); }
+    .ignore-area-chip.is-active { background: var(--sage-strong); color: var(--ink); border-color: var(--sage-strong); }
+    .ignore-area-remove {
+      flex: 0 0 auto; width: 32px; height: 32px; display: inline-grid; place-items: center;
+      border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: var(--paper-dim);
+    }
+    .ignore-area-remove:hover { background: var(--danger-well); border-color: var(--danger); color: var(--danger); }
+    .ignore-area-empty { color: var(--paper-dim); font-size: .84rem; margin: 12px 0 0; }
+
     /* ---------- Responsive ---------- */
     @media (max-width: 1080px) {
       .observatory-grid { grid-template-columns: 1fr; }
@@ -622,6 +652,7 @@
         <div class="zone-stage">
             <img id="zonePreview" alt="Latest frame from this camera; click to draw a detection zone">
             <div id="polygonOverlay"></div>
+            <div id="ignoreAreaOverlay"></div>
         </div>
         <p class="zone-hint">Click on the image to draw a detection zone. Zone drawing needs a mouse or trackpad; the settings below work with the keyboard.</p>
         <div class="zone-fields">
@@ -634,6 +665,13 @@
                 <input type="password" id="zoneSource" placeholder="rtsp://user:password@address/stream1" autocomplete="off">
                 <button type="button" class="secret-toggle" data-reveals="zoneSource" aria-label="Show stream address">Show</button>
             </div>
+        </div>
+        <div class="ignore-areas-section">
+            <h4 class="ignore-areas-heading">Ignore areas</h4>
+            <p class="zone-hint">Ignore areas — ClearCam won't detect anything whose centre is inside these boxes. Use for things it keeps mistaking, like bins seen as cars.</p>
+            <button type="button" class="secondary-action" id="drawIgnoreAreaBtn" onclick="startDrawIgnoreArea()" aria-describedby="ignoreAreaHint">Draw ignore area</button>
+            <span id="ignoreAreaHint" class="visually-hidden">Drag a rectangle on the image above to mark an area to ignore.</span>
+            <ul class="ignore-area-list" id="ignoreAreaList" aria-label="Ignore areas for this camera"></ul>
         </div>
         <div class="form-actions zone-actions">
             <button type="button" class="zone-clear" onclick="clearPolygon()">Clear Zone</button>
@@ -1844,10 +1882,15 @@
         zonePreview.src = `/${encodeURIComponent(cameraName)}/preview.png`;
         zoneModal.style.display = "flex";
         initZoneEditor();
+        resetIgnoreAreaEditor();
         fetch(`/get_settings?cam=${encodeURIComponent(cameraName)}`)
             .then(res => res.json())
             .then(data => {
                 console.log("Received settings data:", data);
+                ignoreAreasState = (Array.isArray(data && data.ignore_areas) ? data.ignore_areas : []).map(a => ({
+                    box: a.box, classes: Array.isArray(a.classes) ? a.classes.slice() : []
+                }));
+                renderIgnoreAreaList();
                 const previewEl = document.getElementById("zonePreview");
                 previewEl.onload = function() {
                     if (data && data.coords) {
@@ -1900,6 +1943,152 @@
             firstPoint: null,
             isPolygonComplete: false
         };
+        resetIgnoreAreaEditor();
+    }
+
+    // ---------- Ignore areas: rectangles where nothing is ever detected ----------
+    // Same drag-to-draw idea as the alert zone above, but a rectangle instead
+    // of a polygon, and it can be scoped to one or a few classes (e.g. "car")
+    // instead of covering every class the detector knows.
+    const IGNORE_AREA_CLASS_IDS = [2, 0, 1, 7, 15, 16]; // car, person, bicycle, truck, cat, dog
+    let ignoreAreasState = [];
+    let ignoreDrawCleanup = null;
+
+    function resetIgnoreAreaEditor() {
+        if (ignoreDrawCleanup) { ignoreDrawCleanup(); ignoreDrawCleanup = null; }
+        ignoreAreasState = [];
+        const overlay = document.getElementById('ignoreAreaOverlay');
+        if (overlay) overlay.innerHTML = '';
+        const list = document.getElementById('ignoreAreaList');
+        if (list) list.innerHTML = '';
+    }
+
+    function clampUnit(v) { return Math.min(1, Math.max(0, v)); }
+
+    function startDrawIgnoreArea() {
+        const previewEl = document.getElementById("zonePreview");
+        const drawBtn = document.getElementById('drawIgnoreAreaBtn');
+        if (ignoreDrawCleanup) return; // a drag is already in progress
+        previewEl.removeEventListener('click', handlePreviewClick);
+        previewEl.style.cursor = 'crosshair';
+        drawBtn.disabled = true;
+        announce('Drag a rectangle on the image to add an ignore area.');
+
+        const overlay = document.getElementById('ignoreAreaOverlay');
+        const box = document.createElement('div');
+        box.className = 'ignore-area-box is-drawing';
+        overlay.appendChild(box);
+        let start = null;
+
+        const posOf = (e) => {
+            const rect = previewEl.getBoundingClientRect();
+            return { x: clampUnit((e.clientX - rect.left) / rect.width), y: clampUnit((e.clientY - rect.top) / rect.height) };
+        };
+        const paint = (a, b) => {
+            const x1 = Math.min(a.x, b.x), y1 = Math.min(a.y, b.y);
+            const x2 = Math.max(a.x, b.x), y2 = Math.max(a.y, b.y);
+            box.style.left = (x1 * 100) + '%'; box.style.top = (y1 * 100) + '%';
+            box.style.width = ((x2 - x1) * 100) + '%'; box.style.height = ((y2 - y1) * 100) + '%';
+            return [x1, y1, x2, y2];
+        };
+        const onMove = (e) => { if (start) paint(start, posOf(e)); };
+        const onDown = (e) => { start = posOf(e); paint(start, start); };
+        const onUp = (e) => {
+            const end = posOf(e);
+            const finalBox = start ? paint(start, end) : null;
+            cleanup();
+            if (finalBox && (finalBox[2] - finalBox[0]) > 0.01 && (finalBox[3] - finalBox[1]) > 0.01) {
+                ignoreAreasState.push({ box: finalBox, classes: [] });
+                renderIgnoreAreaList();
+                announce('Ignore area added. Choose which classes it applies to, or leave it as all.');
+            } else {
+                box.remove();
+                announce('Ignore area too small; nothing added.', true);
+            }
+        };
+        function cleanup() {
+            previewEl.removeEventListener('mousedown', onDown);
+            previewEl.removeEventListener('mousemove', onMove);
+            previewEl.removeEventListener('mouseup', onUp);
+            previewEl.style.cursor = 'crosshair';
+            drawBtn.disabled = false;
+            previewEl.addEventListener('click', handlePreviewClick);
+            ignoreDrawCleanup = null;
+        }
+        ignoreDrawCleanup = cleanup;
+        previewEl.addEventListener('mousedown', onDown);
+        previewEl.addEventListener('mousemove', onMove);
+        previewEl.addEventListener('mouseup', onUp);
+    }
+
+    function removeIgnoreArea(index) {
+        ignoreAreasState.splice(index, 1);
+        renderIgnoreAreaList();
+    }
+
+    function toggleIgnoreAreaClass(index, className) {
+        const area = ignoreAreasState[index];
+        if (!area) return;
+        const at = area.classes.indexOf(className);
+        if (at === -1) area.classes.push(className); else area.classes.splice(at, 1);
+        renderIgnoreAreaList();
+    }
+
+    function renderIgnoreAreaList() {
+        const overlay = document.getElementById('ignoreAreaOverlay');
+        const list = document.getElementById('ignoreAreaList');
+        if (!overlay || !list) return;
+        overlay.innerHTML = '';
+        list.innerHTML = '';
+        if (!ignoreAreasState.length) {
+            const empty = document.createElement('p');
+            empty.className = 'ignore-area-empty';
+            empty.textContent = 'No ignore areas yet.';
+            list.appendChild(empty);
+            return;
+        }
+        ignoreAreasState.forEach((area, index) => {
+            const [x1, y1, x2, y2] = area.box;
+            const box = document.createElement('div');
+            box.className = 'ignore-area-box';
+            box.style.left = (x1 * 100) + '%'; box.style.top = (y1 * 100) + '%';
+            box.style.width = ((x2 - x1) * 100) + '%'; box.style.height = ((y2 - y1) * 100) + '%';
+            overlay.appendChild(box);
+
+            const item = document.createElement('li');
+            item.className = 'ignore-area-item';
+            const label = document.createElement('span');
+            label.className = 'ignore-area-label';
+            label.textContent = `Area ${index + 1}`;
+            item.appendChild(label);
+
+            const chips = document.createElement('div');
+            chips.className = 'ignore-area-chips';
+            chips.setAttribute('role', 'group');
+            chips.setAttribute('aria-label', `Classes ignored in area ${index + 1} (none selected means every class)`);
+            IGNORE_AREA_CLASS_IDS.forEach(id => {
+                const name = classLabels[id];
+                if (!name) return;
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'ignore-area-chip' + (area.classes.includes(name) ? ' is-active' : '');
+                chip.textContent = name;
+                chip.setAttribute('aria-pressed', String(area.classes.includes(name)));
+                chip.addEventListener('click', () => toggleIgnoreAreaClass(index, name));
+                chips.appendChild(chip);
+            });
+            item.appendChild(chips);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'ignore-area-remove';
+            remove.setAttribute('aria-label', `Remove ignore area ${index + 1}`);
+            remove.textContent = '×';
+            remove.addEventListener('click', () => removeIgnoreArea(index));
+            item.appendChild(remove);
+
+            list.appendChild(item);
+        });
     }
 
     async function loadFeatureFlags() {
@@ -1997,16 +2186,22 @@
               if (problem) { announce(problem, true); return; }
               params.set('url', src);
           }
+          params.set('ignore_areas', JSON.stringify(ignoreAreasState.map(a => ({
+              box: a.box, classes: (a.classes && a.classes.length) ? a.classes : undefined
+          }))));
 
           fetch(`/edit_settings?${params.toString()}`)
-              .then(res => {
-                  if (!res.ok) throw new Error("Failed to save settings");
+              .then(async res => {
+                  if (!res.ok) {
+                      const body = await res.json().catch(() => null);
+                      throw new Error((body && body.error) || "Failed to save settings");
+                  }
                   closeZoneModal();
                   announce(`Settings saved for ${currentEditingCamera}.`);
               })
               .catch(err => {
                   console.error("Save settings failed:", err);
-                  announce('Camera settings were not saved. Your changes are still here; try again.', true);
+                  announce(err.message || 'Camera settings were not saved. Your changes are still here; try again.', true);
               });
       }
 
