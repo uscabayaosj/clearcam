@@ -123,7 +123,7 @@ def collect(work, hours, interval):
 def thumbnail(path, size=(32, 18)):
     from PIL import Image
     with Image.open(path) as im:
-        return list(im.convert('L').resize(size).getdata())
+        return list(im.convert('L').resize(size).tobytes())
 
 
 def difference(a, b):
@@ -154,13 +154,24 @@ def pick_varied(frames, limit, min_diff=6.0, thumb=thumbnail):
     return sorted(picked)
 
 
+def split_by_hour(name, holdout_hours=(1, 5, 13, 17), valid_hours=(3, 9, 15, 21)):
+    """Split by the hour a frame was taken (name 'YYYYMMDD-HHMMSS.jpg').
+
+    Fixed cameras make neighbouring frames near-identical, so a per-frame
+    split would leak almost the same picture into train and holdout. Whole
+    hours held back keep the holdout honest.
+    """
+    hour = int(name[9:11])
+    return 'holdout' if hour in holdout_hours else ('valid' if hour in valid_hours else 'train')
+
+
 def split_for(name, camera):
     """Deterministic split by hash: ~70% train, ~15% valid, ~15% holdout."""
     h = int(hashlib.sha1(f'{camera}/{name}'.encode()).hexdigest(), 16) % 100
     return 'train' if h < 70 else ('valid' if h < 85 else 'holdout')
 
 
-def select(work, per_camera, keep_raw=False, min_diff=6.0):
+def select(work, per_camera, keep_raw=False, min_diff=6.0, stride=None):
     work = Path(work)
     raw = work / 'raw'
     out = work / 'selected'
@@ -168,10 +179,13 @@ def select(work, per_camera, keep_raw=False, min_diff=6.0):
     totals = {}
     for cam_dir in sorted(p for p in raw.iterdir() if p.is_dir()):
         frames = sorted(cam_dir.glob('*.jpg'))
-        picked = pick_varied(frames, per_camera, min_diff)
+        # --stride: every Nth frame, split by hour. Fixed cameras barely change
+        # between frames (a passer-by moves the whole-frame difference very
+        # little), so the difference-based pick keeps almost nothing.
+        picked = frames[::stride][:per_camera] if stride else pick_varied(frames, per_camera, min_diff)
         slug = re.sub(r'[^a-z0-9]+', '-', cam_dir.name.lower()).strip('-')
         for f in picked:
-            split = split_for(f.name, cam_dir.name)
+            split = split_by_hour(f.name) if stride else split_for(f.name, cam_dir.name)
             dest = out / split / 'images'
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, dest / f'own-{slug}-{f.name}')
@@ -194,13 +208,15 @@ def main():
     s.add_argument('--per-camera', type=int, default=150)
     s.add_argument('--min-diff', type=float, default=6.0)
     s.add_argument('--keep-raw', action='store_true')
+    s.add_argument('--stride', type=int, default=None,
+                   help='keep every Nth frame and split by hour (suits fixed cameras)')
     for p in (c, s):
         p.add_argument('--work', default=str(DEFAULT_WORK))
     args = parser.parse_args()
     if args.cmd == 'collect':
         collect(args.work, args.hours, args.interval)
     else:
-        select(args.work, args.per_camera, args.keep_raw, args.min_diff)
+        select(args.work, args.per_camera, args.keep_raw, args.min_diff, args.stride)
 
 
 if __name__ == '__main__':

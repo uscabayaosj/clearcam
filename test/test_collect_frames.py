@@ -122,3 +122,14 @@ def test_split_for_varies_with_camera():
     # same filename, different cameras -> not forced into lockstep splits
     per_camera = {cf.split_for('same-name.jpg', f'cam{i}') for i in range(20)}
     assert len(per_camera) > 1
+
+
+def test_split_by_hour_holds_back_whole_hours():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'script'))
+    import collect_frames as cf
+    assert cf.split_by_hour('20260928-010203.jpg') == 'holdout'
+    assert cf.split_by_hour('20260928-030000.jpg') == 'valid'
+    assert cf.split_by_hour('20260928-220000.jpg') == 'train'
+    assert {cf.split_by_hour(f'20260928-01{m:02d}00.jpg') for m in range(60)} == {'holdout'}

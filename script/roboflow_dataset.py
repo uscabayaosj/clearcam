@@ -83,7 +83,7 @@ from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from utils import roboflow_sync
+from utils import roboflow_sync, static_filter
 from script import train_from_corrections as tfc
 
 TARGET_CLASSES = ['person', 'bicycle', 'car', 'truck', 'dog', 'stroller', 'child', 'scooter']
@@ -381,7 +381,7 @@ def local_source_images(dirpath):
     return pairs
 
 
-def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_prefix=None):
+def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_prefix=None, ignore_areas=None):
     """Teacher-label every image under a local (own-camera) source directory.
 
     These frames carry no labels of their own (collect_frames.py's `select`
@@ -424,8 +424,37 @@ def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_p
                              width=width, height=height, final_name=img_path.name, batch=batch))
         if (n + 1) % 500 == 0:
             print(f'{print_prefix}: prepared {n + 1}/{len(pairs)}', flush=True)
-    print(f'{print_prefix}: prepared {len(records)} images from local frames', flush=True)
+    records, counts, dropped = drop_static_labels(records, ignore_areas)
+    print(f'{print_prefix}: prepared {len(records)} images from local frames '
+          f'({dropped} boxes dropped as scenery or in ignore areas)', flush=True)
     return records, counts
+
+
+def drop_static_labels(records, ignore_areas=None):
+    """Remove movable-class labels that sit at the same spot across a camera's
+    frames (see utils/static_filter.py). Returns (records, counts, dropped)."""
+    from utils import static_filter
+    def box(line):
+        cls, cx, cy, w, h = line.split()[:5]
+        cx, cy, w, h = float(cx), float(cy), float(w), float(h)
+        return TARGET_CLASSES[int(cls)], (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    frames = [(static_filter.camera_of(r['final_name']), [box(l) for l in r['lines']]) for r in records]
+    masks = static_filter.static_mask(frames)
+    # Hand-marked areas where the teacher keeps seeing something that isn't
+    # there (e.g. bins called cars): drop those labels so the frames teach
+    # the model the opposite.
+    for (camera, boxes), mask in zip(frames, masks):
+        for j, (name, b) in enumerate(boxes):
+            if static_filter.ignored(camera, name, b, ignore_areas or {}):
+                mask[j] = False
+    counts = {name: 0 for name in TARGET_CLASSES}
+    dropped = 0
+    for rec, mask in zip(records, masks):
+        rec['lines'] = [l for l, keep in zip(rec['lines'], mask) if keep]
+        dropped += mask.count(False)
+        for l in rec['lines']:
+            counts[TARGET_CLASSES[int(l.split()[0])]] += 1
+    return records, counts, dropped
 
 
 # -------------------------------------------------------------------- driver
@@ -448,6 +477,9 @@ def main():
                                                                        'local sources are never subsampled')
     parser.add_argument('--teacher', default='yolo11m.pt', help="'none' to skip teacher pseudo-labels "
                                                                   "(not allowed together with --local)")
+    parser.add_argument('--ignore', action='append', default=[],
+                         help="Repeatable, own-camera sources only: 'camera=x1,y1,x2,y2[:class,...]' (0-1 coords). "
+                              "Teacher labels centred there are dropped (e.g. bins it calls cars).")
     parser.add_argument('--teacher-conf', type=float, default=0.5, help='teacher confidence threshold (default 0.5)')
     parser.add_argument('--target-project', default=None, help='default: the configured project')
     parser.add_argument('--workers', type=int, default=4, help='concurrent uploads (default 4)')
@@ -521,11 +553,16 @@ def main():
             rec['batch'] = batch
         all_records.extend(records)
 
+    try:
+        ignore_areas = static_filter.parse_ignore(args.ignore)
+    except ValueError as err:
+        sys.exit(str(err))
     for raw_dir in args.locals:
         dirpath = Path(raw_dir).expanduser()
         prefix = f'local:{dirpath.name}'
         records, counts = prepare_local(dirpath, teacher, teacher_index_map,
-                                         teacher_conf=args.teacher_conf, print_prefix=prefix)
+                                         teacher_conf=args.teacher_conf, print_prefix=prefix,
+                                         ignore_areas=ignore_areas)
         print(f'{prefix}: box counts {format_counts(counts)}', flush=True)
         for k, v in counts.items():
             totals[k] += v

@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from script import train_from_corrections as tfc
 from script.roboflow_dataset import TARGET_CLASSES
+from utils import static_filter
 
 IOU_THRESHOLD = 0.5
 REFERENCE_CONF = 0.35   # the reference model's own detections stand in for ground truth
@@ -260,6 +261,9 @@ def main():
                          help=f'reference model whose detections at conf {REFERENCE_CONF} stand in for '
                               'ground truth (default yolo11x.pt)')
     parser.add_argument('--conf', type=float, default=0.4, help='confidence threshold for stock/candidate (default 0.4)')
+    parser.add_argument('--ignore', action='append', default=[],
+                         help="'camera=x1,y1,x2,y2[:class,...]': reference boxes centred there are not real "
+                              "(same areas as roboflow_dataset.py --ignore)")
     parser.add_argument('--sheet', default=None, help='optional contact sheet path (e.g. compare.jpg)')
     args = parser.parse_args()
 
@@ -278,12 +282,30 @@ def main():
     candidate_names = restrict_names({i: candidate_model.names[i] for i in range(len(candidate_model.names))}, TARGET_CLASSES)
     reference_names = restrict_names({i: reference_model.names[i] for i in range(len(reference_model.names))}, TARGET_CLASSES)
 
+    # Reference first, for every frame, so boxes that never move (a post the
+    # reference also calls a 'person' at night) can be dropped before scoring.
+    reference_all = [run_model(reference_model, img_path, REFERENCE_CONF, reference_names) for img_path in images]
+    flat = [(static_filter.camera_of(img_path.name),
+             [(cls, box) for cls, dets in ref.items() for box, _conf in dets]) for img_path, ref in zip(images, reference_all)]
+    masks = static_filter.static_mask(flat)
+    ignore_areas = static_filter.parse_ignore(args.ignore)
+    for (camera, boxes), mask in zip(flat, masks):
+        for j, (cls, box) in enumerate(boxes):
+            if static_filter.ignored(camera, cls, box, ignore_areas): mask[j] = False
+    reference_filtered = []
+    for (_camera, boxes), mask in zip(flat, masks):
+        kept = {}
+        for (cls, box), keep in zip(boxes, mask):
+            if keep: kept.setdefault(cls, []).append(box)
+        reference_filtered.append(kept)
+    dropped = sum(m.count(False) for m in masks)
+    print(f'reference: {dropped} stationary movable-class boxes dropped as scenery', flush=True)
+
     stock_frame_counts, candidate_frame_counts, sheet_pairs = [], [], []
     for n, img_path in enumerate(images):
         stock_dets = run_model(stock_model, img_path, args.conf, stock_names)
         candidate_dets = run_model(candidate_model, img_path, args.conf, candidate_names)
-        reference_dets = run_model(reference_model, img_path, REFERENCE_CONF, reference_names)
-        reference_boxes = {cls: [box for box, _conf in dets] for cls, dets in reference_dets.items()}
+        reference_boxes = reference_filtered[n]
 
         stock_frame_counts.append(class_counts(stock_dets, reference_boxes, TARGET_CLASSES))
         candidate_frame_counts.append(class_counts(candidate_dets, reference_boxes, TARGET_CLASSES))
