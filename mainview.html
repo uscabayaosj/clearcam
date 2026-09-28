@@ -144,6 +144,9 @@
     .camera-error span { display: block; }
     .retry-camera { margin-top: 14px; }
     .camera-card {
+      /* Column so a longer AI caption grows the scene area while the name and
+         buttons stay at the bottom, aligned across a grid row. */
+      display: flex; flex-direction: column;
       position: relative; overflow: hidden; min-width: 0; border-radius: var(--r-panel); background: var(--ink-panel);
       box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .22s var(--ease-out), transform .28s var(--ease-out);
     }
@@ -151,12 +154,12 @@
     .camera-card.selected { box-shadow: inset 0 0 0 1px rgba(194, 222, 207, .55), var(--shadow-deep); }
     .video-container { position: relative; aspect-ratio: 16 / 9; background: #060a0b; overflow: hidden; }
     .camera-card video, #multiView video { display: block; width: 100%; height: 100%; object-fit: cover; background: #060a0b; }
-    .video-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; color: var(--paper-dim); font-size: .86rem; background: linear-gradient(180deg, #0d1718, #070b0c); }
+    .video-placeholder { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; color: var(--paper-dim); font-size: .86rem; background: linear-gradient(180deg, #0d1718, #070b0c); }
     .stream-badge { position: absolute; top: 12px; left: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: rgba(10, 18, 19, .72); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: var(--paper-muted); font-size: .68rem; font-weight: 600; letter-spacing: .08em; pointer-events: none; }
     .stream-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
     .stream-badge-live { color: var(--sage-strong); }
     .stream-badge-live::before { opacity: 1; box-shadow: 0 0 0 3px rgba(194, 222, 207, .18); }
-    .camera-info { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px 10px 14px; }
+    .camera-info { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px 10px 14px; }
     .camera-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: .92rem; }
     .camera-actions { flex: 0 0 auto; }
     .button-group { display: flex; gap: 4px; }
@@ -179,8 +182,10 @@
     .scene-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; background: var(--ink-soft); color: var(--paper-muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
     .scene-chip.scene-empty { background: transparent; padding-left: 0; }
     .scene-caption {
-      margin-top: 4px; min-height: calc(.86rem * 1.35 * 2); color: var(--paper); font-size: .86rem; line-height: 1.35;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      /* Full caption, never clipped: the card grows to fit. Two lines are
+         reserved so short captions don't make cards jump in height. */
+      margin: 4px 0 0; min-height: calc(.86rem * 1.4 * 2); color: var(--paper); font-size: .86rem; line-height: 1.4;
+      overflow-wrap: anywhere; text-wrap: pretty;
     }
     .scene-caption--off { visibility: hidden; }
     .scene-caption.scene-pending { color: var(--paper-dim); font-style: italic; }
@@ -2551,16 +2556,19 @@
       const placeholder = card?.querySelector('.video-placeholder');
       if (placeholder) placeholder.style.display = 'none';
     }
-    function setLiveImgSrc(camName, boxesOn) {
+    function setLiveImgSrc(camName, boxesOn, retry = false) {
       const card = findCameraCard(camName);
       const img = card?.querySelector('.live-detections');
       if (!img) return;
-      img.src = `/live_view?cam=${encodeURIComponent(camName)}${boxesOn ? '' : '&boxes=0'}`;
+      // A retry needs a fresh URL: WebKit won't reload an <img> whose src is
+      // set back to the same address that just failed, so the card stayed
+      // broken until the app was relaunched.
+      img.src = `/live_view?cam=${encodeURIComponent(camName)}${boxesOn ? '' : '&boxes=0'}${retry ? `&r=${Date.now()}` : ''}`;
     }
     function onLiveOnlyImgError(camName) {
       showReconnectOverlay(camName);
       clearTimeout(liveReconnectTimers.get(camName));
-      const timer = setTimeout(() => setLiveImgSrc(camName, detectionPreferredOn(camName)), 5000);
+      const timer = setTimeout(() => setLiveImgSrc(camName, detectionPreferredOn(camName), true), 5000);
       liveReconnectTimers.set(camName, timer);
     }
     function startLiveOnlyCard(camName) {
@@ -4011,7 +4019,6 @@
       if (scene?.caption) {
         captionEl.classList.remove('scene-pending');
         const age = formatSceneAge(scene.caption_at);
-        captionEl.title = scene.caption;
         captionEl.innerHTML = `<span class="scene-ai-label">AI</span>${escapeSceneHtml(scene.caption)}${age ? `<span class="scene-age">${age}</span>` : ''}`;
       } else if (state === 'pending') {
         captionEl.classList.add('scene-pending');
