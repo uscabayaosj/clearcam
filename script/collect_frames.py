@@ -84,6 +84,66 @@ def grab(base, token, camera):
         return first_jpeg(resp)
 
 
+MOVING = {'person', 'bicycle', 'dog', 'motorcycle', 'stroller', 'child', 'scooter', 'cat'}
+
+
+def in_window(hour, window):
+    """window=(start, end) hours, e.g. (7, 20); None = always."""
+    return window is None or window[0] <= hour < window[1]
+
+
+def moving_now(scene):
+    """Cameras whose live counts include something that moves (from /live_scene)."""
+    return [name for name, cam in (scene.get('cameras') or {}).items()
+            if any(cls in MOVING and n for cls, n in (cam.get('counts') or {}).items())]
+
+
+def collect_activity(work, hours, interval, window=None, cooldown=10, poll=2):
+    """Save a frame whenever a camera sees something that moves (person, bike,
+    dog...), at most one per camera every `cooldown` seconds, plus a
+    background frame per camera every `interval` seconds. Only between the
+    hours in `window`."""
+    raw = Path(work) / 'raw'
+    deadline = time.time() + hours * 3600
+    last_saved, last_background, saved, saved_moving = {}, 0.0, 0, 0
+    print(f'collecting on activity (plus every {interval}s) for {hours}h'
+          f'{f", {window[0]:02d}:00-{window[1]:02d}:00 only" if window else ""} into {raw}', flush=True)
+    while time.time() < deadline:
+        now = time.time()
+        if not in_window(datetime.now().hour, window):
+            time.sleep(60); continue
+        endpoint = engine_endpoint()
+        if endpoint is None:
+            time.sleep(30); continue
+        base, token = endpoint
+        try:
+            with _get(base, token, '/live_scene') as resp:
+                scene = json.loads(resp.read())
+        except Exception:
+            time.sleep(poll); continue
+        wanted = {c: 'moving' for c in moving_now(scene) if now - last_saved.get(c, 0) >= cooldown}
+        if now - last_background >= interval:
+            for c in (scene.get('cameras') or {}):
+                wanted.setdefault(c, 'background')
+            last_background = now
+        for camera, why in wanted.items():
+            try:
+                jpg = grab(base, token, camera)
+            except Exception:
+                continue
+            if not jpg: continue
+            folder = raw / camera
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / f'{datetime.now():%Y%m%d-%H%M%S}.jpg').write_bytes(jpg)
+            last_saved[camera] = time.time()
+            saved += 1
+            saved_moving += why == 'moving'
+            if saved % 50 == 0:
+                print(f'{datetime.now():%m-%d %H:%M} {saved} frames saved ({saved_moving} with movement)', flush=True)
+        time.sleep(poll)
+    print(f'done: {saved} frames saved ({saved_moving} with movement)', flush=True)
+
+
 def collect(work, hours, interval):
     raw = Path(work) / 'raw'
     deadline = time.time() + hours * 3600
@@ -204,6 +264,9 @@ def main():
     c = sub.add_parser('collect')
     c.add_argument('--hours', type=float, default=12)
     c.add_argument('--interval', type=int, default=120)
+    c.add_argument('--on-activity', action='store_true',
+                   help='save when a camera sees a person/bike/dog (plus every --interval seconds)')
+    c.add_argument('--between', default=None, help="hours to collect, e.g. '7-20'")
     s = sub.add_parser('select')
     s.add_argument('--per-camera', type=int, default=150)
     s.add_argument('--min-diff', type=float, default=6.0)
@@ -214,7 +277,11 @@ def main():
         p.add_argument('--work', default=str(DEFAULT_WORK))
     args = parser.parse_args()
     if args.cmd == 'collect':
-        collect(args.work, args.hours, args.interval)
+        window = tuple(int(h) for h in args.between.split('-')) if args.between else None
+        if args.on_activity:
+            collect_activity(args.work, args.hours, args.interval, window)
+        else:
+            collect(args.work, args.hours, args.interval)
     else:
         select(args.work, args.per_camera, args.keep_raw, args.min_diff, args.stride)
 
