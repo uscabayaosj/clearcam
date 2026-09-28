@@ -1,0 +1,16 @@
+{
+  "source": "local",
+  "path": "/Users/ulyssescabayao/Library/Application Support/ClearCam/Data/training/roboflow-models/clearcam-home-v5/not-installed/yolo11n-home.mlpackage",
+  "version": 5,
+  "names": [
+    "bicycle",
+    "car",
+    "child",
+    "dog",
+    "person",
+    "scooter",
+    "stroller",
+    "truck"
+  ],
+  "installed_at": "2026-09-28T22:34:25.632013"
+}
