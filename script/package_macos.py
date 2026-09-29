@@ -316,6 +316,12 @@ def main():
             if attempt == 4: raise
     final = dist / 'ClearCam.app'
     if final.exists():
+        # Keep one previous build to roll back to, not one per build (each
+        # is ~2.6 GB): older ones go to the Trash, recoverable until emptied.
+        trash = Path.home() / '.Trash'
+        for older in dist.glob('ClearCam-previous-*.app'):
+            try: older.rename(trash / older.name)
+            except OSError: pass
         previous = dist / ('ClearCam-previous-' + stage.name.removeprefix('ClearCam-build-') + '.app')
         final.rename(previous)
         print(f'Previous alpha preserved at {previous}')
