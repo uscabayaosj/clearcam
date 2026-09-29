@@ -1297,6 +1297,41 @@ def draw_predictions(frame, preds, color_dict):
     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, font_color, 1, cv2.LINE_AA)
   return frame
 
+_live_jpeg_cache = {}
+_live_jpeg_lock = threading.Lock()
+
+
+def live_view_jpeg(cam, cam_name, frame, frame_num, draw_boxes, want_w, now):
+  """One JPEG per (camera, frame, boxes, width), shared by every viewer
+  watching that combination; scaled down to the viewer's display width."""
+  h, w = frame.shape[:2]
+  target_w = w if want_w <= 0 else max(320, min(w, (want_w + 79) // 80 * 80))  # 80-px steps keep the cache useful
+  key = (cam_name, draw_boxes, target_w)
+  with _live_jpeg_lock:
+    hit = _live_jpeg_cache.get(key)
+    if hit is not None and hit[0] == frame_num:
+      return hit[1]
+  scale = target_w / w
+  if scale < 1:
+    out = cv2.resize(frame, (target_w, int(round(h * scale))), interpolation=cv2.INTER_AREA)
+  else:
+    out = frame.copy()
+  if draw_boxes:
+    live = cam.live_boxes.get(cam_name)
+    if live is not None and now - live[0] < 1.5:
+      boxes = live[1]
+      if scale < 1 and len(boxes):
+        boxes = boxes.copy(); boxes[:, :4] *= scale
+      counter = cam.count_zones.get(cam_name)
+      out = draw_live_boxes(out, boxes, counter.dwell_timers(now) if counter else None)
+  ok, jpg = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 72])
+  if not ok: return None
+  payload = jpg.tobytes()
+  with _live_jpeg_lock:
+    _live_jpeg_cache[key] = (frame_num, payload)
+  return payload
+
+
 def short_duration(seconds):
   """Compact label time: 42s, 12m, 1h05."""
   seconds = int(seconds)
@@ -1325,7 +1360,7 @@ def draw_live_boxes(frame, boxes, timers=None):
     in_range = 0 <= cls_i < len(class_labels)
     label_name = class_labels[cls_i] if in_range else str(cls_i)
     color = color_dict.get(label_name, neutral) if in_range else neutral
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)  # axis-aligned: anti-aliasing buys nothing, costs CPU
 
     timer = timers.get(int(track_id))
     if timer is not None:
@@ -1583,6 +1618,11 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_refusal("Unknown camera", code=404)
             return
           draw_boxes = (query.get("boxes", ["1"])[0] or "1") != "0"
+          # Width the viewer actually shows (panel width x screen scale). JPEG
+          # encoding was the engine's biggest cost, and a 1280-wide frame in
+          # a 600-point panel was also the web view's biggest decode cost.
+          try: want_w = int(query.get("w", ["0"])[0] or 0)
+          except ValueError: want_w = 0
           self.send_response(200)
           self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=clearcamframe")
           self.send_header("Cache-Control", "no-store")
@@ -1603,17 +1643,8 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 continue
               last_sent_frame_num = frame_num
               loop_start = time.time()
-
-              out = frame.copy()
-              if draw_boxes:
-                live = cam.live_boxes.get(cam_name)
-                if live is not None and loop_start - live[0] < 1.5:
-                  counter = cam.count_zones.get(cam_name)
-                  out = draw_live_boxes(out, live[1], counter.dwell_timers(loop_start) if counter else None)
-
-              ok, jpg = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 72])
-              if not ok: continue
-              payload = jpg.tobytes()
+              payload = live_view_jpeg(cam, cam_name, frame, frame_num, draw_boxes, want_w, loop_start)
+              if payload is None: continue
               self.wfile.write(b"--clearcamframe\r\n")
               self.wfile.write(b"Content-Type: image/jpeg\r\n")
               self.wfile.write(f"Content-Length: {len(payload)}\r\n\r\n".encode('ascii'))

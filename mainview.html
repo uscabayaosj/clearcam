@@ -2847,6 +2847,28 @@
       const placeholder = card?.querySelector('.video-placeholder');
       if (placeholder) placeholder.style.display = 'none';
     }
+    // Live frames are encoded at the width they're shown at (the engine's
+    // biggest cost was compressing full 1280-px frames for ~600-pt panels).
+    // Rounded to 80-px steps so the engine can share one encode per size.
+    function liveWidthParam(el) {
+      const box = el && (el.parentElement || el);
+      const px = Math.round((box?.getBoundingClientRect().width || 0) * (window.devicePixelRatio || 1));
+      return px > 0 ? `&w=${Math.ceil(px / 80) * 80}` : '';
+    }
+    // When a panel changes size a lot (full screen, window resize), ask for
+    // frames at the new size.
+    const liveSizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const img = entry.target.querySelector('img.live-detections, img[data-live]');
+        if (!img || !img.src) continue;
+        const want = liveWidthParam(img);
+        const have = (img.src.match(/&w=\d+/) || [''])[0];
+        if (want && have && want !== have) {
+          const a = +want.slice(3), b = +have.slice(3);
+          if (Math.abs(a - b) / b > 0.25) img.src = img.src.replace(have, want);
+        }
+      }
+    });
     function setLiveImgSrc(camName, boxesOn, retry = false) {
       const card = findCameraCard(camName);
       const img = card?.querySelector('.live-detections');
@@ -2854,7 +2876,8 @@
       // A retry needs a fresh URL: WebKit won't reload an <img> whose src is
       // set back to the same address that just failed, so the card stayed
       // broken until the app was relaunched.
-      img.src = `/live_view?cam=${encodeURIComponent(camName)}${boxesOn ? '' : '&boxes=0'}${retry ? `&r=${Date.now()}` : ''}`;
+      img.src = `/live_view?cam=${encodeURIComponent(camName)}${boxesOn ? '' : '&boxes=0'}${liveWidthParam(img)}${retry ? `&r=${Date.now()}` : ''}`;
+      if (img.parentElement) liveSizeObserver.observe(img.parentElement);
     }
     function onLiveOnlyImgError(camName) {
       showReconnectOverlay(camName);
@@ -2931,7 +2954,8 @@
           const video = container.querySelector('video');
           if (video) video.insertAdjacentElement('afterend', img); else container.appendChild(img);
         }
-        img.src = `/live_view?cam=${encodeURIComponent(camName)}`;
+        img.src = `/live_view?cam=${encodeURIComponent(camName)}${liveWidthParam(img)}`;
+        if (img.parentElement) liveSizeObserver.observe(img.parentElement);
       } else if (img) {
         img.removeAttribute('src');
         img.remove();
@@ -3224,8 +3248,13 @@
           const img = document.createElement('img');
           img.alt = `Live view of ${cam}`;
           img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'cover';
-          img.src = `/live_view?cam=${encodeURIComponent(cam)}`;
+          img.dataset.live = '1';
           wrapper.appendChild(img);
+          // Sized once it's in the wall: the width comes from its tile.
+          requestAnimationFrame(() => {
+            img.src = `/live_view?cam=${encodeURIComponent(cam)}${liveWidthParam(img)}`;
+            liveSizeObserver.observe(wrapper);
+          });
           container.appendChild(wrapper);
         });
         if (container.requestFullscreen) container.requestFullscreen();

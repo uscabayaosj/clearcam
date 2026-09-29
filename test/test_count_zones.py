@@ -428,6 +428,7 @@ class StartupAndResumeTests(unittest.TestCase):
 
     def test_arrival_after_grace_counts(self):
         c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0)
+        c.update(1.0, [])                                   # counting starts, zone empty
         c.update(100.0, [(1, 'car', box_at(0.5, 0.5))])
         c.update(101.0, [(1, 'car', box_at(0.5, 0.5))])
         self.assertEqual(c.snapshot(101.0)[0]['stats']['car']['entered'], 1)
@@ -514,3 +515,15 @@ class DwellTimerTests(unittest.TestCase):
         self.assertEqual(set(timers), {1})                 # the person's zone counts passes, no timer
         self.assertAlmostEqual(timers[1][0], 60.0)
         self.assertFalse(timers[1][1])
+
+
+class LateStartTests(unittest.TestCase):
+    def test_grace_starts_at_first_frame_not_at_creation(self):
+        # Models and streams take a while: the first frame arrives long after
+        # the counter is created. Cars already there must still be adopted.
+        c = count_zones.ZoneCounter([zone(classes=('car',), metric='dwell')], now=0.0)
+        for t in (120.0, 121.0, 150.0):
+            c.update(t, [(1, 'car', box_at(0.5, 0.5))])
+        snap = c.snapshot(150.0)[0]
+        self.assertEqual(snap['stats']['car']['entered'], 0)
+        self.assertTrue(snap['inside_now'][0]['adopted'])

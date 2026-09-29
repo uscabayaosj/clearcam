@@ -27,7 +27,7 @@ PERSON_DWELL_LOST_TIMEOUT = 5.0
 DWELL_EXIT_HYSTERESIS = 15.0  # same for "dwell" zones: a parked car's footpoint wobbling over the edge isn't leaving
 DEFAULT_LOST_TIMEOUT = 3.0    # seconds with no sighting at all -> force-close ("passes" zones)
 DWELL_LOST_TIMEOUT = 20.0     # same, but longer for "dwell" zones (a parked car briefly occluded)
-STARTUP_GRACE = 15.0          # objects already inside when counting starts are timed, not counted as entries
+STARTUP_GRACE = 30.0          # objects already inside when counting starts are timed, not counted as entries
 RESUME_WINDOW = 1800.0        # a "dwell" object lost and re-found at the same spot within this is the same stay
 PARKED_CLASSES = frozenset({"car", "truck"})   # only things that park get the lost-and-refound hold
 RESUME_DISTANCE = 0.04        # ...when its footpoint is within this (normalised) distance of where it was lost
@@ -187,7 +187,11 @@ class ZoneCounter:
         start = now if now is not None else time.time()
         # Tracker ids start fresh whenever the engine starts, so a car parked
         # before a restart would otherwise be counted as a second arrival.
-        self._adopt_until = start + startup_grace
+        # Per zone, from the first frame that zone actually sees: models load,
+        # streams connect and zone config arrives a while after the counter
+        # is created, so a fixed start time would have expired already.
+        self._startup_grace = startup_grace
+        self._adopt_until = {}
         # (zone_id, class) -> [state of a dwell stay whose track was lost,
         # kept so the same object re-found at the same spot resumes it]
         self._limbo = {}
@@ -251,6 +255,8 @@ class ZoneCounter:
         seen_keys = set()
 
         for zone_id, zone in self.zones.items():
+            if zone_id not in self._adopt_until:
+                self._adopt_until[zone_id] = now + self._startup_grace
             classes = zone["classes"]
             polygon = zone["polygon"]
             for track_id, class_name, box in tracks:
@@ -284,7 +290,7 @@ class ZoneCounter:
                                 # arrival time and don't count it again.
                                 state["entry_time"] = resumed["entry_time"]
                                 state["adopted"] = resumed.get("adopted", False)
-                            elif state["pending_enter_since"] < self._adopt_until:
+                            elif state["pending_enter_since"] < self._adopt_until[zone_id]:
                                 state["adopted"] = True   # was here before counting started
                             else:
                                 self._class_stats(zone_id, eff_class)["entered"] += 1
