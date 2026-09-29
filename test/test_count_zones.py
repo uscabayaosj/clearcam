@@ -229,15 +229,15 @@ class DwellStatsTests(unittest.TestCase):
         counter.update(0.5, [(1, 'car', box_at(0.5, 0.5))])
         counter.update(9.9, [(1, 'car', box_at(0.5, 0.5))])
         counter.update(10.0, [(1, 'car', box_at(0.05, 0.05))])
-        counter.update(10.6, [(1, 'car', box_at(0.05, 0.05))])  # exits (0.6s outside)
+        counter.update(10.6 + count_zones.DWELL_EXIT_HYSTERESIS, [(1, 'car', box_at(0.05, 0.05))])  # exit confirmed
         # Track 2: entry sample at t=20, last seen inside at t=25.4, exits at
         # t=26.1 -> dwell 5.4s.
-        counter.update(20.0, [(2, 'car', box_at(0.5, 0.5))])
-        counter.update(20.5, [(2, 'car', box_at(0.5, 0.5))])
-        counter.update(25.4, [(2, 'car', box_at(0.5, 0.5))])
-        counter.update(25.5, [(2, 'car', box_at(0.05, 0.05))])
-        counter.update(26.1, [(2, 'car', box_at(0.05, 0.05))])
-        snap = {zz['id']: zz for zz in counter.snapshot(30.0)}['z1']
+        counter.update(40.0, [(2, 'car', box_at(0.5, 0.5))])
+        counter.update(40.5, [(2, 'car', box_at(0.5, 0.5))])
+        counter.update(45.4, [(2, 'car', box_at(0.5, 0.5))])
+        counter.update(45.5, [(2, 'car', box_at(0.05, 0.05))])
+        counter.update(46.1 + count_zones.DWELL_EXIT_HYSTERESIS, [(2, 'car', box_at(0.05, 0.05))])
+        snap = {zz['id']: zz for zz in counter.snapshot(80.0)}['z1']
         stats = snap['stats']['car']
         self.assertEqual(stats['dwell_count'], 2)
         self.assertAlmostEqual(stats['dwell_max'], 9.9, places=1)
@@ -458,3 +458,17 @@ class StartupAndResumeTests(unittest.TestCase):
         c.update(100.0, [])
         c.update(300.0, [(2, 'car', box_at(0.6, 0.5))]); c.update(301.0, [(2, 'car', box_at(0.6, 0.5))])
         self.assertEqual(c.snapshot(301.0)[0]['stats']['car']['entered'], 2)
+
+
+class DwellEdgeWobbleTests(unittest.TestCase):
+    def test_parked_car_wobbling_over_the_edge_is_one_stay(self):
+        z = zone(classes=('car',), metric='dwell')
+        c = make_counter([z], now=0.0)
+        inside, outside = box_at(0.5, 0.5), box_at(0.5, 0.5 + 0.5)   # footpoint jumps out of the square
+        t = 0.0
+        for k in range(40):   # 20 s alternating in/out every 2 s
+            c.update(t, [(1, 'car', inside if (k // 2) % 2 == 0 else outside)])
+            t += 0.5
+        snap = c.snapshot(t)[0]
+        self.assertEqual(snap['stats']['car']['entered'], 1)
+        self.assertEqual(snap['stats']['car']['exited'], 0)

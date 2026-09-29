@@ -22,6 +22,7 @@ METRICS = ('passes', 'dwell')
 
 ENTRY_HYSTERESIS = 0.5   # seconds a footpoint must be continuously inside to confirm entry
 EXIT_HYSTERESIS = 0.5    # seconds a footpoint must be continuously outside to confirm exit
+DWELL_EXIT_HYSTERESIS = 15.0  # same for "dwell" zones: a parked car's footpoint wobbling over the edge isn't leaving
 DEFAULT_LOST_TIMEOUT = 3.0    # seconds with no sighting at all -> force-close ("passes" zones)
 DWELL_LOST_TIMEOUT = 20.0     # same, but longer for "dwell" zones (a parked car briefly occluded)
 STARTUP_GRACE = 15.0          # objects already inside when counting starts are timed, not counted as entries
@@ -252,7 +253,8 @@ class ZoneCounter:
                     if state["confirmed"]:
                         if state["pending_exit_since"] is None:
                             state["pending_exit_since"] = now
-                        elif now - state["pending_exit_since"] >= EXIT_HYSTERESIS:
+                        elif now - state["pending_exit_since"] >= (
+                                DWELL_EXIT_HYSTERESIS if zone["metric"] == "dwell" else EXIT_HYSTERESIS):
                             self._close(zone_id, key)
 
         # Tracks not seen at all this frame: force-close once lost long enough.
