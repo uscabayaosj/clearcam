@@ -1313,7 +1313,9 @@ def live_view_jpeg(cam, cam_name, frame, frame_num, draw_boxes, want_w, now):
       return hit[1]
   scale = target_w / w
   if scale < 1:
-    out = cv2.resize(frame, (target_w, int(round(h * scale))), interpolation=cv2.INTER_AREA)
+    # INTER_LINEAR: INTER_AREA at non-integer ratios (1280 -> 640-and-a-bit)
+    # cost more than the JPEG encode it was saving; for <2x it looks the same.
+    out = cv2.resize(frame, (target_w, int(round(h * scale))), interpolation=cv2.INTER_LINEAR)
   else:
     out = frame.copy()
   if draw_boxes:
