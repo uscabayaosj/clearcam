@@ -808,6 +808,15 @@
         </div>
         <p class="setup-hint">Older days are removed first. Today's recording is always kept.</p>
       </div>
+      <div class="setup-group" id="layoutSetupGroup">
+        <h4>Camera zones</h4>
+        <p class="setup-hint">Copy counting zones, ignore areas and alert zones to another Mac. Cameras are matched by name.</p>
+        <div class="form-actions" style="justify-content:flex-start; margin-top:12px;">
+          <button type="button" class="modal-quiet" id="exportLayoutBtn" aria-label="Export counting zones, ignore areas and alert zones to a file" onclick="exportLayout()">Export zones…</button>
+          <button type="button" class="modal-quiet" id="importLayoutBtn" aria-label="Import counting zones, ignore areas and alert zones from a file" onclick="document.getElementById('layoutFileInput').click()">Import zones…</button>
+          <input type="file" id="layoutFileInput" accept="application/json,.json" hidden aria-label="Zones file to import">
+        </div>
+      </div>
       <div class="setup-group analyse-section">
         <h4>Analyse a video file</h4>
         <form id="analyseFootageForm">
@@ -4720,6 +4729,52 @@
       }
       setTimeout(loadRoboflowState, 3000);
     }
+
+    async function exportLayout() {
+      try {
+        const response = await fetch('/export_layout');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Zones were not exported. Try again.');
+        announce('Saved to Downloads: ' + String(result.path).split('/').pop());
+      } catch (error) {
+        announce(error.message || 'Zones were not exported. Try again.', true);
+      }
+    }
+    async function importLayoutFile(file) {
+      const url = '/import_layout';
+      try {
+        const text = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error('That file could not be read.'));
+          reader.readAsText(file);
+        });
+        const post = async query => {
+          const response = await fetch(url + query, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || 'Zones were not imported.');
+          return result;
+        };
+        const plan = await post('?dry_run=1');
+        if (!plan.apply.length) {
+          announce('No cameras in that file are on this Mac' + (plan.skip.length ? ' (' + plan.skip.join(', ') + ')' : '') + '. Nothing was imported.', true);
+          return;
+        }
+        let message = 'Replace zones on ' + plan.apply.join(', ') + '?';
+        if (plan.skip.length) message += ' Not on this Mac: ' + plan.skip.join(', ') + '.';
+        if (!confirm(message)) return;
+        const done = await post('');
+        announce('Zones imported for ' + done.apply.join(', ') + '.');
+        fetchLiveScene();
+      } catch (error) {
+        announce(error.message || 'Zones were not imported.', true);
+      }
+    }
+    document.getElementById('layoutFileInput').addEventListener('change', event => {
+      const file = event.target.files && event.target.files[0];
+      event.target.value = '';
+      if (file) importLayoutFile(file);
+    });
 
     async function refreshLocalAIStatus() {
       const target = document.getElementById('localAIState');

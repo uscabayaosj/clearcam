@@ -82,6 +82,7 @@ from utils import summaries
 from utils import corrections
 from utils import ignore_areas as ignore_areas_mod
 from utils import count_zones as count_zones_mod
+from utils import layout_io
 from utils import macos_notifications
 from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop
 from utils.event_dedupe import RecentTriggers
@@ -1770,6 +1771,19 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
             self.send_200((zone or {}).get("ignore_areas", []))
             return
 
+        if parsed_path.path == "/export_layout":
+            names = sorted(n for n, v in database.run_get("links", None).items() if isinstance(v, str) and v.strip())
+            layout = layout_io.build_layout({n: database.run_get("settings", n) for n in names}, class_names=class_labels)
+            try:
+                path = layout_io.write_export(Path.home() / "Downloads", layout)
+            except OSError as e:
+                self.send_refusal(f"Could not save the zones file to Downloads: {e}", 500)
+                return
+            try: subprocess.run(["open", "-R", str(path)], timeout=10, check=False)
+            except Exception: pass
+            self.send_200({"path": str(path), "cameras": names})
+            return
+
         if parsed_path.path == "/count_zones":
             if not cam_name:
                 self.send_error(400, "Missing cam parameter")
@@ -2278,6 +2292,33 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
           body = roboflow_sync.public_config(config)
           body['status'] = roboflow_sync.status(BASE_DIR)
           self.send_200(body)
+          return
+
+        if parsed_path.path == '/import_layout':
+          content_length = int(self.headers.get('Content-Length', 0))
+          if content_length > 5 * 1024 * 1024:
+            self.send_refusal('That file is too large to be a ClearCam zones file.')
+            return
+          try:
+            data = json.loads(self.rfile.read(content_length) or b'{}')
+          except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_refusal('That file is not valid JSON.')
+            return
+          try:
+            parsed_layout = layout_io.parse_layout(data, class_labels)
+          except ValueError as e:
+            self.send_refusal(f"Nothing was imported. {e}")
+            return
+          local_names = [n for n, v in database.run_get("links", None).items() if isinstance(v, str) and v.strip()]
+          summary = layout_io.plan_import(parsed_layout, local_names)
+          if parse_qs(parsed_path.query).get("dry_run", [""])[0] not in ("", "0", "false"):
+            self.send_200(summary)
+            return
+          for name in summary["apply"]:
+            settings = database.run_get("settings", name)
+            # The live loop re-reads settings and re-parses ignore_areas/count_zones on change, as after /edit_settings.
+            database.run_put("settings", name, layout_io.apply_entry(settings, parsed_layout[name]))
+          self.send_200(summary)
           return
 
         if self.path.startswith("/edit_settings"):

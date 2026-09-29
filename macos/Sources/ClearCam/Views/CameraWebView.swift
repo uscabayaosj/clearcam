@@ -45,5 +45,16 @@ struct CameraWebView: NSViewRepresentable {
             if let window = webView.window { alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) } }
             else { completionHandler(false) }
         }
+        func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+            let finish: (NSApplication.ModalResponse) -> Void = { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+            if let window = webView.window { panel.beginSheetModal(for: window, completionHandler: finish) }
+            else { finish(panel.runModal()) }
+        }
     }
 }
