@@ -217,6 +217,7 @@
     .counter-stat { display: flex; flex-direction: column; }
     .counter-stat.is-undetected dd { color: var(--paper-dim); }
     .counter-stat.is-undetected dt::after { content: " · not detected by the current model"; }
+    .counter-paused { margin: -4px 0 0; padding: 8px 10px; border-radius: var(--r-control); background: rgba(231, 179, 93, .12); color: var(--brass); font-size: .8rem; line-height: 1.4; }
     .counter-now { margin: 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--paper-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
     .counter-now .counter-now-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--sage-strong); vertical-align: middle; }
 
@@ -4390,7 +4391,7 @@
     // parking-bay zones read as one "cars parked / average parking time");
     // zones that count passes get one figure per class, labelled with the
     // zone ("Persons on sidewalk") when a camera has several.
-    function renderCounterCard(name, zones, detectableSet) {
+    function renderCounterCard(name, zones, detectableSet, camInfo) {
       const card = document.createElement('article');
       card.className = 'counter-card';
       const heading = document.createElement('h3');
@@ -4399,6 +4400,17 @@
       sub.textContent = zones.map(z => z.name).join(' · ');
       heading.appendChild(sub);
       card.appendChild(heading);
+      if (camInfo && camInfo.view_moved) {
+        // The camera has turned away from the view its zones were drawn on
+        // (a pan-tilt camera following motion or patrolling): counting waits.
+        const note = document.createElement('p');
+        note.className = 'counter-paused';
+        note.setAttribute('role', 'status');
+        note.textContent = (camInfo.view_moved_seconds || 0) > 1800
+          ? 'Paused: the camera view has changed. Redraw this camera\'s zones if it was moved on purpose.'
+          : 'Paused while the camera is turned away. Counting resumes when it returns.';
+        card.appendChild(note);
+      }
       const stats = document.createElement('dl');
       stats.className = 'counter-stats';
       const dwell = {};
@@ -4452,7 +4464,7 @@
       const camNames = Object.keys(cameras || {}).filter(name => (cameras[name].zones || []).length);
       if (!camNames.length) { section.hidden = true; container.innerHTML = ''; return; }
       section.hidden = false;
-      container.replaceChildren(...camNames.map(name => renderCounterCard(name, cameras[name].zones, detectableSet)));
+      container.replaceChildren(...camNames.map(name => renderCounterCard(name, cameras[name].zones, detectableSet, cameras[name])));
     }
 
     async function fetchLiveScene() {

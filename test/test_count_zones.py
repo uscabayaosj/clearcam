@@ -527,3 +527,19 @@ class LateStartTests(unittest.TestCase):
         snap = c.snapshot(150.0)[0]
         self.assertEqual(snap['stats']['car']['entered'], 0)
         self.assertTrue(snap['inside_now'][0]['adopted'])
+
+
+class RiderSpeedTests(unittest.TestCase):
+    def run_track(self, step_per_second, frames=12):
+        c = make_counter([zone(classes=('person',))], now=0.0)
+        for k in range(frames):
+            t = k * 0.1
+            x = 0.21 + step_per_second * t
+            c.update(t, [(1, 'person', (x, 0.40, x + 0.02, 0.50))])   # box height 0.10
+        return c.snapshot(2.0)[0]['stats']['person']['entered']
+
+    def test_fast_person_without_a_detected_bike_is_a_rider(self):
+        self.assertEqual(self.run_track(0.40), 0)     # 4 heights/s: cycling
+
+    def test_walker_counts(self):
+        self.assertEqual(self.run_track(0.08), 1)     # 0.8 heights/s: walking

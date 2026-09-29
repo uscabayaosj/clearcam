@@ -147,6 +147,10 @@ def footpoint(box):
 
 
 RIDDEN = frozenset({"bicycle", "motorcycle"})
+# A "person" covering more than this many of their own box heights per second
+# is riding, even on frames where the bike itself isn't detected (walking is
+# ~0.8, running ~2, cycling 3.5+).
+RIDER_SPEED = 2.5
 
 
 def _is_riding(person_box, vehicle_box):
@@ -198,6 +202,7 @@ class ZoneCounter:
         # track_id -> last time seen riding: a cyclist counts as a bicycle, not
         # as a person walking, even on frames where the bike isn't detected.
         self._riders = {}
+        self._motion = {}   # track_id -> (time, footpoint, smoothed speed in heights/s)
         self.zones = {}
         self._stats = {}   # zone_id -> class_name -> _new_class_stats()
         self._state = {}   # (zone_id, track_id) -> dict, see update()
@@ -245,8 +250,27 @@ class ZoneCounter:
         tracks = list(tracks)
         vehicles = [box for _tid, cls, box in tracks if cls in RIDDEN]
         for track_id, cls, box in tracks:
-            if _effective_class(cls) == "person" and any(_is_riding(box, v) for v in vehicles):
+            if _effective_class(cls) != "person":
+                continue
+            if any(_is_riding(box, v) for v in vehicles):
                 self._riders[track_id] = now
+            height = max(1e-3, box[3] - box[1])
+            foot = footpoint(box)
+            prev = self._motion.get(track_id)
+            speed = 0.0
+            if prev is not None and now - prev[0] > 0.05:
+                step = ((foot[0] - prev[1][0]) ** 2 + (foot[1] - prev[1][1]) ** 2) ** 0.5 / height
+                # A jump of more than two body heights between samples is a
+                # detection glitch or an id swap, not movement.
+                speed = prev[2] if step > 2.0 else 0.6 * prev[2] + 0.4 * (step / (now - prev[0]))
+            elif prev is not None:
+                speed = prev[2]
+            self._motion[track_id] = (now, foot, speed)
+            if speed > RIDER_SPEED:
+                self._riders[track_id] = now
+        for track_id, (seen, _foot, _speed) in list(self._motion.items()):
+            if now - seen > 60:
+                del self._motion[track_id]
         for track_id, seen in list(self._riders.items()):
             if now - seen > 60:
                 del self._riders[track_id]
@@ -365,6 +389,13 @@ class ZoneCounter:
         stats["dwell_count"] += 1
         stats["dwell_sum"] += dwell
         stats["dwell_max"] = max(stats["dwell_max"], dwell)
+
+    def restart_grace(self, now):
+        """Treat whatever is inside from now on for STARTUP_GRACE as already
+        there (timed, not counted) -- e.g. after a camera turns back to the
+        zones' view."""
+        for zone_id in self.zones:
+            self._adopt_until[zone_id] = now + self._startup_grace
 
     def dwell_timers(self, now=None):
         """{track_id: (seconds inside, adopted)} for tracks currently inside a

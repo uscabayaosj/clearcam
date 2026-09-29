@@ -81,6 +81,7 @@ from utils import household
 from utils import summaries
 from utils import corrections
 from utils import ignore_areas as ignore_areas_mod
+from utils import view_guard as view_guard_mod
 from utils import count_zones as count_zones_mod
 from utils import layout_io
 from utils import macos_notifications
@@ -399,6 +400,17 @@ def is_vod(cam_name): return (BASE_DIR / "cameras" / cam_name / "streams" / "vid
 DECODE_MAX_WIDTH = max(640, int(os.environ.get('CLEARCAM_DECODE_MAX_WIDTH', '1280')))
 
 
+def view_reference_path(cam_name):
+  """Edge map of the view a camera's zones were drawn on (see utils/view_guard)."""
+  return BASE_DIR / "count_zones" / f"{cam_name}.view.npy"
+
+
+def load_view_guard(cam_name):
+  try: reference = np.load(view_reference_path(cam_name))
+  except (OSError, ValueError): reference = None
+  return view_guard_mod.ViewGuard(reference)
+
+
 def count_zones_state_path(now=None):
     """One file per local day, holding every camera's counting-zone
     aggregates -- see utils/count_zones.py's ZoneCounter.to_dict()/load_dict()
@@ -494,6 +506,8 @@ class VideoCapture:
     # tracker in run_inference; rebuilt (config only, stats kept) alongside
     # self.settings whenever settings change (see process_frame).
     self.count_zones = {}
+    self.view_guard = {}        # per camera: has the view turned away from the zones' view?
+    self.view_checked = {}
     self.last_count_zones_save = 0.0
     self.count = {}
     self.prev_time = {}
@@ -551,6 +565,8 @@ class VideoCapture:
     self.settings[cam_name] = None
     self.ignore_areas[cam_name] = []
     self.count_zones[cam_name] = count_zones_mod.ZoneCounter()
+    self.view_guard[cam_name] = load_view_guard(cam_name)
+    self.view_checked[cam_name] = 0.0
     self.count_zones[cam_name].load_dict(load_count_zones_file().get(cam_name))
     self.start_time[cam_name] = None
     
@@ -1108,8 +1124,13 @@ class VideoCapture:
               except ValueError as e:
                 print("Invalid stored ignore_areas for", cam_name, ":", e)
               try:
+                old_zones = (self.settings[cam_name] or {}).get("count_zones")
                 self.count_zones[cam_name].reconfigure(
                   count_zones_mod.parse_zones((new_settings or {}).get("count_zones"), class_labels))
+                if self.settings[cam_name] is not None and (new_settings or {}).get("count_zones") != old_zones:
+                  # Zones redrawn: the view they were drawn on is the one to guard now.
+                  self.view_guard[cam_name] = view_guard_mod.ViewGuard()
+                  view_reference_path(cam_name).unlink(missing_ok=True)
               except ValueError as e:
                 print("Invalid stored count_zones for", cam_name, ":", e)
             self.settings[cam_name] = new_settings
@@ -1193,7 +1214,28 @@ class VideoCapture:
        (t.tlwh[0] / orig_w, t.tlwh[1] / orig_h, (t.tlwh[0] + t.tlwh[2]) / orig_w, (t.tlwh[1] + t.tlwh[3]) / orig_h))
       for t in online_targets if t.tracklet_len >= 1
     )
-    self.count_zones[cam_name].update(time.time(), zone_tracks)
+    now_t = time.time()
+    if now_t - self.view_checked.get(cam_name, 0) >= 1.0 and self.count_zones[cam_name].zones:
+      self.view_checked[cam_name] = now_t
+      guard = self.view_guard[cam_name]
+      was_moved = guard.moved
+      had_reference = guard.reference is not None
+      try:
+        small = cv2.resize(cv2.cvtColor(np.asarray(frame), cv2.COLOR_BGR2GRAY), view_guard_mod.THUMB, interpolation=cv2.INTER_AREA)
+        guard.check(now_t, small)
+      except Exception as e:  # never let the guard stop detection
+        print("view guard:", e)
+      if not had_reference or (not guard.moved and int(now_t) % 300 == 0):
+        try:
+          view_reference_path(cam_name).parent.mkdir(parents=True, exist_ok=True)
+          np.save(view_reference_path(cam_name), guard.reference)
+        except OSError: pass
+      if was_moved and not guard.moved:
+        # Back on the zones' view: anything that showed up meanwhile is timed,
+        # not counted as a new arrival (parked cars resume their stay).
+        self.count_zones[cam_name].restart_grace(now_t)
+    if not self.view_guard[cam_name].moved:
+      self.count_zones[cam_name].update(now_t, zone_tracks)
     online_targets = [p for p in online_targets if (classes is None or str(int(p.class_id)) in classes)]
     preds = []
     for x in online_targets:
@@ -1693,7 +1735,10 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                 for entry in zone["inside_now"]:
                   entry["seconds"] = round(now - entry["since"], 1) if entry["since"] is not None else 0
                 zones.append(zone)
+            guard = cam.view_guard.get(name)
             cameras[name] = {
+              "view_moved": bool(guard and guard.moved),
+              "view_moved_seconds": round(now - guard.moved_since) if guard and guard.moved and guard.moved_since else 0,
               "counts": counts,
               "total": sum(counts.values()),
               "updated_at": live[0] if live is not None else None,
