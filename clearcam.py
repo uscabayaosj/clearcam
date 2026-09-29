@@ -1297,7 +1297,14 @@ def draw_predictions(frame, preds, color_dict):
     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, font_color, 1, cv2.LINE_AA)
   return frame
 
-def draw_live_boxes(frame, boxes):
+def short_duration(seconds):
+  """Compact label time: 42s, 12m, 1h05."""
+  seconds = int(seconds)
+  if seconds < 60: return f"{seconds}s"
+  if seconds < 3600: return f"{seconds // 60}m"
+  return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}"
+
+def draw_live_boxes(frame, boxes, timers=None):
   """Cheap overlay for the /live_view MJPEG stream: a rounded-look rectangle
   (cv2.rectangle, LINE_AA) plus a filled label chip in the class colour,
   clamped inside the frame. `boxes` is an Nx7 array of
@@ -1309,7 +1316,8 @@ def draw_live_boxes(frame, boxes):
   font = cv2.FONT_HERSHEY_SIMPLEX
   scale = max(0.35, 0.5 * h / 720)
   neutral = (140, 140, 140)
-  for x1, y1, x2, y2, conf, cls, _ in boxes:
+  timers = timers or {}
+  for x1, y1, x2, y2, conf, cls, track_id in boxes:
     x1, y1 = max(0, int(x1)), max(0, int(y1))
     x2, y2 = min(w - 1, int(x2)), min(h - 1, int(y2))
     if x2 <= x1 or y2 <= y1: continue
@@ -1319,7 +1327,13 @@ def draw_live_boxes(frame, boxes):
     color = color_dict.get(label_name, neutral) if in_range else neutral
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
-    label = f"{label_name} {int(round(conf * 100))}%"
+    timer = timers.get(int(track_id))
+    if timer is not None:
+      # Inside a time-in-zone area: how long it has been there beats confidence.
+      seconds, adopted = timer
+      label = f"{label_name} {'>' if adopted else ''}{short_duration(seconds)}"
+    else:
+      label = f"{label_name} {int(round(conf * 100))}%"
     (tw, th), baseline = cv2.getTextSize(label, font, scale, 1)
     pad_x, pad_y = 6, 4
     chip_w, chip_h = tw + pad_x * 2, th + baseline + pad_y * 2
@@ -1594,7 +1608,8 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
               if draw_boxes:
                 live = cam.live_boxes.get(cam_name)
                 if live is not None and loop_start - live[0] < 1.5:
-                  out = draw_live_boxes(out, live[1])
+                  counter = cam.count_zones.get(cam_name)
+                  out = draw_live_boxes(out, live[1], counter.dwell_timers(loop_start) if counter else None)
 
               ok, jpg = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 72])
               if not ok: continue

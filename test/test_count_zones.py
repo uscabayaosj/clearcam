@@ -503,3 +503,14 @@ class PersonDwellTests(unittest.TestCase):
         self.assertEqual(snap['inside_now'], [])
         self.assertEqual(snap['stats']['person']['dwell_count'], 1)
         self.assertAlmostEqual(snap['stats']['person']['dwell_max'], 3.0)
+
+
+class DwellTimerTests(unittest.TestCase):
+    def test_timers_for_tracks_inside_dwell_zones_only(self):
+        c = make_counter([zone(classes=('car',), metric='dwell'), zone(id='p', classes=('person',))], now=0.0)
+        for t in (10.0, 10.6):
+            c.update(t, [(1, 'car', box_at(0.5, 0.5)), (2, 'person', box_at(0.5, 0.5))])
+        timers = c.dwell_timers(70.0)
+        self.assertEqual(set(timers), {1})                 # the person's zone counts passes, no timer
+        self.assertAlmostEqual(timers[1][0], 60.0)
+        self.assertFalse(timers[1][1])

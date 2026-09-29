@@ -360,6 +360,21 @@ class ZoneCounter:
         stats["dwell_sum"] += dwell
         stats["dwell_max"] = max(stats["dwell_max"], dwell)
 
+    def dwell_timers(self, now=None):
+        """{track_id: (seconds inside, adopted)} for tracks currently inside a
+        "dwell" zone -- for labelling boxes in the live view. Safe to call from
+        another thread (reads a snapshot of the state)."""
+        now = now if now is not None else time.time()
+        timers = {}
+        for (zone_id, track_id), state in list(self._state.items()):
+            zone = self.zones.get(zone_id)
+            if zone is None or zone["metric"] != "dwell" or not state.get("confirmed") or state.get("entry_time") is None:
+                continue
+            seconds = max(0.0, now - state["entry_time"])
+            if track_id not in timers or seconds > timers[track_id][0]:
+                timers[track_id] = (seconds, bool(state.get("adopted")))
+        return timers
+
     def snapshot(self, now=None):
         """JSON-ready per-zone stats for the current local day, plus who is
         inside right now. Does not mutate state beyond a day rollover check."""

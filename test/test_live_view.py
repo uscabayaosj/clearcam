@@ -11,13 +11,14 @@ def load_draw_live_boxes():
     source = ast.parse((Path(__file__).parents[1] / 'clearcam.py').read_text())
     func = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'draw_live_boxes')
     is_bright = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'is_bright_color')
+    short = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'short_duration')
     namespace = {
         'cv2': cv2,
         'np': np,
         'class_labels': ['person', 'car'],
         'color_dict': {'person': (50, 100, 150), 'car': (100, 200, 50)},
     }
-    exec(compile(ast.Module(body=[is_bright, func], type_ignores=[]), '<draw_live_boxes>', 'exec'), namespace)
+    exec(compile(ast.Module(body=[is_bright, short, func], type_ignores=[]), '<draw_live_boxes>', 'exec'), namespace)
     return namespace['draw_live_boxes']
 
 
@@ -69,3 +70,15 @@ class DrawLiveBoxesTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ZoneTimerLabelTests(unittest.TestCase):
+    def test_timer_label_draws_and_short_duration_formats(self):
+        draw = load_draw_live_boxes()
+        short = draw.__globals__['short_duration']
+        self.assertEqual([short(42), short(12 * 60 + 5), short(3900)], ['42s', '12m', '1h05'])
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        boxes = np.array([[100, 100, 300, 300, 0.87, 1, 7]], dtype=np.float32)
+        plain = draw(frame.copy(), boxes)
+        timed = draw(frame.copy(), boxes, {7: (754.0, False)})
+        self.assertFalse(np.array_equal(plain, timed))   # label text differs
