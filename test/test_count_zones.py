@@ -472,3 +472,34 @@ class DwellEdgeWobbleTests(unittest.TestCase):
         snap = c.snapshot(t)[0]
         self.assertEqual(snap['stats']['car']['entered'], 1)
         self.assertEqual(snap['stats']['car']['exited'], 0)
+
+
+class RiderTests(unittest.TestCase):
+    def test_cyclist_is_not_a_person_walking(self):
+        c = make_counter([zone(classes=('person',)), zone(id='z2', classes=('bicycle',))], now=0.0)
+        person, bike = (0.48, 0.40, 0.52, 0.55), (0.46, 0.48, 0.54, 0.58)
+        for t in (0.0, 0.6, 1.2):
+            c.update(t, [(1, 'person', person), (2, 'bicycle', bike)])
+        c.update(1.8, [(1, 'person', person)])          # bike missed this frame: still a rider
+        snap = {z['id']: z for z in c.snapshot(2.0)}
+        self.assertEqual(snap['z1']['stats']['person']['entered'], 0)
+        self.assertEqual(snap['z2']['stats']['bicycle']['entered'], 1)
+
+    def test_pedestrian_next_to_parked_bike_still_counts(self):
+        c = make_counter([zone(classes=('person',))], now=0.0)
+        person, bike = (0.30, 0.40, 0.34, 0.55), (0.60, 0.48, 0.68, 0.58)
+        for t in (0.0, 0.6):
+            c.update(t, [(1, 'person', person), (2, 'bicycle', bike)])
+        self.assertEqual(c.snapshot(1.0)[0]['stats']['person']['entered'], 1)
+
+
+class PersonDwellTests(unittest.TestCase):
+    def test_person_lost_from_view_is_not_held_as_inside(self):
+        c = make_counter([zone(classes=('person',), metric='dwell')], now=0.0)
+        for t in (0.0, 0.6, 3.0):
+            c.update(t, [(1, 'person', box_at(0.5, 0.5))])
+        c.update(3.0 + count_zones.PERSON_DWELL_LOST_TIMEOUT + 0.1, [])
+        snap = c.snapshot(20.0)[0]
+        self.assertEqual(snap['inside_now'], [])
+        self.assertEqual(snap['stats']['person']['dwell_count'], 1)
+        self.assertAlmostEqual(snap['stats']['person']['dwell_max'], 3.0)

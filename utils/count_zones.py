@@ -22,11 +22,14 @@ METRICS = ('passes', 'dwell')
 
 ENTRY_HYSTERESIS = 0.5   # seconds a footpoint must be continuously inside to confirm entry
 EXIT_HYSTERESIS = 0.5    # seconds a footpoint must be continuously outside to confirm exit
+PERSON_DWELL_EXIT_HYSTERESIS = 2.0   # people in a "dwell" zone: quicker, they don't park
+PERSON_DWELL_LOST_TIMEOUT = 5.0
 DWELL_EXIT_HYSTERESIS = 15.0  # same for "dwell" zones: a parked car's footpoint wobbling over the edge isn't leaving
 DEFAULT_LOST_TIMEOUT = 3.0    # seconds with no sighting at all -> force-close ("passes" zones)
 DWELL_LOST_TIMEOUT = 20.0     # same, but longer for "dwell" zones (a parked car briefly occluded)
 STARTUP_GRACE = 15.0          # objects already inside when counting starts are timed, not counted as entries
 RESUME_WINDOW = 1800.0        # a "dwell" object lost and re-found at the same spot within this is the same stay
+PARKED_CLASSES = frozenset({"car", "truck"})   # only things that park get the lost-and-refound hold
 RESUME_DISTANCE = 0.04        # ...when its footpoint is within this (normalised) distance of where it was lost
 
 # A child is reported by the assist detector, not the primary one, but should
@@ -143,6 +146,24 @@ def footpoint(box):
     return ((x1 + x2) / 2.0, y2)
 
 
+RIDDEN = frozenset({"bicycle", "motorcycle"})
+
+
+def _is_riding(person_box, vehicle_box):
+    """A person riding shows up as a person box sitting on a bicycle/motorcycle
+    box: their footpoint lands inside the vehicle box (padded a little), or
+    much of the person box overlaps it."""
+    vx1, vy1, vx2, vy2 = vehicle_box
+    padx, pady = (vx2 - vx1) * 0.15, (vy2 - vy1) * 0.15
+    fx, fy = footpoint(person_box)
+    if vx1 - padx <= fx <= vx2 + padx and vy1 - pady <= fy <= vy2 + pady:
+        return True
+    px1, py1, px2, py2 = person_box
+    inter = max(0.0, min(px2, vx2) - max(px1, vx1)) * max(0.0, min(py2, vy2) - max(py1, vy1))
+    area = max(1e-9, (px2 - px1) * (py2 - py1))
+    return inter / area >= 0.3
+
+
 def _local_date(ts):
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
 
@@ -170,6 +191,9 @@ class ZoneCounter:
         # (zone_id, class) -> [state of a dwell stay whose track was lost,
         # kept so the same object re-found at the same spot resumes it]
         self._limbo = {}
+        # track_id -> last time seen riding: a cyclist counts as a bicycle, not
+        # as a person walking, even on frames where the bike isn't detected.
+        self._riders = {}
         self.zones = {}
         self._stats = {}   # zone_id -> class_name -> _new_class_stats()
         self._state = {}   # (zone_id, track_id) -> dict, see update()
@@ -200,14 +224,30 @@ class ZoneCounter:
         by_class = self._stats.setdefault(zone_id, {})
         return by_class.setdefault(class_name, _new_class_stats())
 
-    def _lost_timeout(self, zone):
-        return DWELL_LOST_TIMEOUT if zone["metric"] == "dwell" else DEFAULT_LOST_TIMEOUT
+    def _lost_timeout(self, zone, class_name=None):
+        if zone["metric"] != "dwell":
+            return DEFAULT_LOST_TIMEOUT
+        return DWELL_LOST_TIMEOUT if class_name in PARKED_CLASSES or class_name is None else PERSON_DWELL_LOST_TIMEOUT
+
+    def _exit_hysteresis(self, zone, class_name):
+        if zone["metric"] != "dwell":
+            return EXIT_HYSTERESIS
+        return DWELL_EXIT_HYSTERESIS if class_name in PARKED_CLASSES else PERSON_DWELL_EXIT_HYSTERESIS
 
     def update(self, now, tracks):
         """tracks: iterable of (track_id, class_name, (x1, y1, x2, y2)),
         box normalised 0-1 in the frame. Call once per processed frame."""
         self._maybe_rollover(now)
         tracks = list(tracks)
+        vehicles = [box for _tid, cls, box in tracks if cls in RIDDEN]
+        for track_id, cls, box in tracks:
+            if _effective_class(cls) == "person" and any(_is_riding(box, v) for v in vehicles):
+                self._riders[track_id] = now
+        for track_id, seen in list(self._riders.items()):
+            if now - seen > 60:
+                del self._riders[track_id]
+        tracks = [(tid, "rider" if (_effective_class(cls) == "person" and tid in self._riders) else cls, box)
+                  for tid, cls, box in tracks]
         seen_keys = set()
 
         for zone_id, zone in self.zones.items():
@@ -253,8 +293,7 @@ class ZoneCounter:
                     if state["confirmed"]:
                         if state["pending_exit_since"] is None:
                             state["pending_exit_since"] = now
-                        elif now - state["pending_exit_since"] >= (
-                                DWELL_EXIT_HYSTERESIS if zone["metric"] == "dwell" else EXIT_HYSTERESIS):
+                        elif now - state["pending_exit_since"] >= self._exit_hysteresis(zone, eff_class):
                             self._close(zone_id, key)
 
         # Tracks not seen at all this frame: force-close once lost long enough.
@@ -267,8 +306,9 @@ class ZoneCounter:
                 del self._state[key]
                 continue
             state = self._state[key]
-            if now - state["last_seen"] >= self._lost_timeout(zone):
-                if state["confirmed"] and zone["metric"] == "dwell" and state.get("last_foot"):
+            if now - state["last_seen"] >= self._lost_timeout(zone, state["class_name"]):
+                if (state["confirmed"] and zone["metric"] == "dwell" and state.get("last_foot")
+                        and state["class_name"] in PARKED_CLASSES):
                     # Not closed yet: the detector may just have lost sight of it.
                     del self._state[key]
                     self._limbo.setdefault((zone_id, state["class_name"]), []).append(state)
@@ -281,7 +321,7 @@ class ZoneCounter:
     def _resume(self, zone_id, zone, class_name, foot, now):
         """Pop and return a lost stay of this class whose last footpoint was
         near `foot`, if one is waiting for this zone; else None."""
-        if zone["metric"] != "dwell":
+        if zone["metric"] != "dwell" or class_name not in PARKED_CLASSES:
             return None
         waiting = self._limbo.get((zone_id, class_name)) or []
         best = None
