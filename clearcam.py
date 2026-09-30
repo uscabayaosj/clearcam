@@ -4,6 +4,7 @@ from utils import native_session
 from detection.yolov9 import YOLOv9
 from detection import coreml_yolo
 from utils import assist_merge
+from utils import tiled_assist
 
 assist_model = None  # optional vehicle-assist Core ML detector; see make_assist_detector
 
@@ -1192,7 +1193,9 @@ class VideoCapture:
         # the primary's COCO classes don't have at all) but misses most people,
         # so it only ever supplies those few classes; everything else stays
         # exactly as the primary detector saw it.
-        preds = assist_merge.merge_assist(preds, assist_model(frame))
+        # Pushchairs are also searched for in two half-frame squares, where
+        # they're big enough for the assist model to see (utils/tiled_assist).
+        preds = assist_merge.merge_assist(preds, tiled_assist.assist_predict(assist_model, frame))
     else:
       frame = Tensor(frame)
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
