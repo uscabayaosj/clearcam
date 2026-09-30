@@ -159,6 +159,14 @@
     .stream-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
     .stream-badge-live { color: var(--sage-strong); }
     .stream-badge-live::before { opacity: 1; box-shadow: 0 0 0 3px rgba(194, 222, 207, .18); }
+    /* Connection badge: a camera on a weak link freezes and reconnects; say so
+       on the picture instead of letting it look like the app has stalled. */
+    .conn-badge { position: absolute; top: 10px; right: 10px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 20px); padding: 4px 10px; border-radius: 999px; background: rgba(10, 18, 19, .78); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: var(--brass); font-size: .72rem; font-weight: 600; letter-spacing: .01em; white-space: nowrap; pointer-events: none; }
+    .conn-badge[hidden] { display: none; }
+    .conn-badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .conn-badge--reconnecting::before { animation: conn-pulse 1.2s ease-in-out infinite; }
+    @keyframes conn-pulse { 50% { opacity: .25; } }
+    @media (prefers-reduced-motion: reduce) { .conn-badge--reconnecting::before { animation: none; } }
     .camera-info { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 10px 10px 14px; }
     .camera-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: .92rem; }
     .camera-actions { flex: 0 0 auto; }
@@ -1864,6 +1872,7 @@
         <div class="video-container">
           ${mediaHtml}
           <div class="video-placeholder">Loading stream...</div>
+          <span class="conn-badge" role="status" hidden></span>
         </div>
         <div class="camera-scene" role="status" aria-live="off">
           <span class="visually-hidden scene-sr-label"></span>
@@ -4312,9 +4321,26 @@
     function escapeSceneHtml(str) {
       return String(str).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
     }
+    function updateConnectionBadge(card, stream) {
+      const badge = card.querySelector('.conn-badge');
+      if (!badge) return;
+      const state = stream && stream.state;
+      // A one-off freeze on a good link just says "Reconnecting"; only a camera
+      // that keeps dropping is called weak.
+      const weak = (stream && stream.drops_10m || 0) >= 3;
+      const text = state === 'reconnecting' ? (weak ? 'Weak connection \u2013 reconnecting' : 'Reconnecting\u2026')
+        : state === 'weak' ? 'Weak connection' : '';
+      badge.hidden = !text;
+      badge.classList.toggle('conn-badge--reconnecting', state === 'reconnecting');
+      if (badge.textContent !== text) badge.textContent = text;
+      badge.title = weak
+        ? `This camera's Wi-Fi keeps dropping (${stream.drops_10m || 0} drops in the last 10 min). A better signal at the camera fixes it.`
+        : '';
+    }
     function updateSceneUI(camName, scene) {
       const card = findCameraCard(camName);
       if (!card) return;
+      updateConnectionBadge(card, scene && scene.stream);
       const countsEl = card.querySelector('.scene-counts');
       const captionEl = card.querySelector('.scene-caption');
       if (!countsEl || !captionEl) return;

@@ -82,6 +82,7 @@ from utils import summaries
 from utils import corrections
 from utils import ignore_areas as ignore_areas_mod
 from utils import view_guard as view_guard_mod
+from utils.stream_health import StreamHealth
 from utils import count_zones as count_zones_mod
 from utils import layout_io
 from utils import macos_notifications
@@ -545,6 +546,8 @@ class VideoCapture:
 
   def init_cam(self, cam_name, src):
     self.pipeline[cam_name] = {"last_frame": None, "last_inference": None, "last_event": None, "state": "connecting", "error": None}
+    if not hasattr(self, 'stream_health'): self.stream_health = {}
+    self.stream_health[cam_name] = StreamHealth()
     self.counter[cam_name] = RollingClassCounter(cam_name=cam_name, window_seconds=float('inf'))
     self.src[cam_name] = src # todo
     self.last_frames[cam_name] = deque(maxlen=2)
@@ -858,6 +861,7 @@ class VideoCapture:
         deadline = time.time() + backoff
         while time.time() < deadline and not self.stopping.is_set(): time.sleep(1)
       session_started = time.time()
+      self.stream_health[cam_name].restarted(session_started)
       return self._open_ffmpeg(cam_name)
 
     while not self.stopping.is_set() and (BASE_DIR / "cameras" / cam_name).exists():
@@ -889,6 +893,7 @@ class VideoCapture:
         self.raw_frame[cam_name] = np.frombuffer(raw_bytes, np.uint8).reshape((self.height[cam_name], self.width[cam_name], 3))
         self.frame_num[cam_name] += 1
         self.pipeline[cam_name]["last_frame"] = time.time()
+        self.stream_health[cam_name].frame(self.pipeline[cam_name]["last_frame"])
         time.sleep(1 / 100)
       except Exception as e:
         print("Error in frame_loop:", e, cam_name)
@@ -1736,7 +1741,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
                   entry["seconds"] = round(now - entry["since"], 1) if entry["since"] is not None else 0
                 zones.append(zone)
             guard = cam.view_guard.get(name)
+            health = getattr(cam, 'stream_health', {}).get(name)
             cameras[name] = {
+              "stream": health.status(now) if health else None,
               "view_moved": bool(guard and guard.moved),
               "view_moved_seconds": round(now - guard.moved_since) if guard and guard.moved and guard.moved_since else 0,
               "counts": counts,
