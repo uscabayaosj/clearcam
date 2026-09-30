@@ -430,6 +430,44 @@ class PrepareLocalTests(unittest.TestCase):
             self.assertEqual(sum(counts.values()), 0)
 
 
+class ExtraLabelsTests(unittest.TestCase):
+    """Hand-checked boxes (e.g. pushchairs, which the COCO teacher can't label)
+    are added to local frames and replace a teacher box of another class on
+    the same object."""
+
+    def setUp(self):
+        self._orig = rd.tfc.teacher_predict_batches
+        # teacher: a person at the left, and the pushchair (right) called a bicycle
+        rd.tfc.teacher_predict_batches = lambda teacher, paths, batch=16, conf=0.5, device='mps': (
+            FakeResult(FakeBoxes([[0, 0, 20, 40], [34, 10, 60, 44]], [0, 1], [0.9, 0.6])) for _ in paths)
+
+    def tearDown(self):
+        rd.tfc.teacher_predict_batches = self._orig
+
+    def test_extra_box_added_and_overlapping_teacher_box_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            _make_image(dirpath / 'train' / 'images' / 'own-cam-20260930-100000.jpg')   # 64x48
+            _make_image(dirpath / 'train' / 'images' / 'own-cam-20260930-110000.jpg')
+            extra = {'own-cam-20260930-100000.jpg': [['stroller', 34 / 64, 10 / 48, 60 / 64, 44 / 48]]}
+            index_map = {0: TARGET.index('person'), 1: TARGET.index('bicycle')}
+            records, counts = rd.prepare_local(dirpath, teacher=object(), teacher_index_map=index_map,
+                                               extra_labels=extra)
+            by_name = {r['orig_name']: r for r in records}
+            classes = lambda n: sorted(TARGET[int(l.split()[0])] for l in by_name[n]['lines'])
+            self.assertEqual(classes('own-cam-20260930-100000.jpg'), ['person', 'stroller'])
+            self.assertEqual(classes('own-cam-20260930-110000.jpg'), ['bicycle', 'person'])   # untouched
+            self.assertEqual(counts['stroller'], 1)
+
+    def test_unknown_class_in_extra_labels_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            _make_image(dirpath / 'train' / 'images' / 'own-cam-20260930-100000.jpg')
+            with self.assertRaises(ValueError):
+                rd.prepare_local(dirpath, teacher=object(), teacher_index_map={},
+                                 extra_labels={'own-cam-20260930-100000.jpg': [['pram', 0, 0, .5, .5]]})
+
+
 class MainArgValidationTests(unittest.TestCase):
     """main()'s early --source/--local and --teacher validation, before any
     config file, network, or model loading is touched."""

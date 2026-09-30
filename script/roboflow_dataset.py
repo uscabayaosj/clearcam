@@ -381,7 +381,34 @@ def local_source_images(dirpath):
     return pairs
 
 
-def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_prefix=None, ignore_areas=None):
+def _xyxy(line):
+    cx, cy, w, h = (float(v) for v in line.split()[1:5])
+    return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+
+
+def merge_extra_labels(lines, extra, overlap=0.3):
+    """Add hand-checked boxes [[class, x1, y1, x2, y2], ...] (normalised) to a
+    frame's teacher lines. A teacher box of another class sitting on the same
+    object (a pushchair called a bicycle, say) is dropped; people stay, since
+    the person pushing overlaps the pushchair."""
+    from utils.static_filter import iou
+    added = []
+    for name, x1, y1, x2, y2 in extra:
+        if name not in TARGET_CLASSES:
+            raise ValueError(f'extra label class {name!r} is not one of {TARGET_CLASSES}')
+        x1, y1, x2, y2 = max(0.0, x1), max(0.0, y1), min(1.0, x2), min(1.0, y2)
+        added.append((TARGET_CLASSES.index(name), (x1, y1, x2, y2)))
+    keep_classes = {TARGET_CLASSES.index('person'), TARGET_CLASSES.index('child')}
+    kept = [l for l in lines
+            if int(l.split()[0]) in keep_classes
+            or not any(int(l.split()[0]) != c and iou(_xyxy(l), b) > overlap for c, b in added)]
+    for c, (x1, y1, x2, y2) in added:
+        kept.append(f'{c} {(x1 + x2) / 2:.6f} {(y1 + y2) / 2:.6f} {x2 - x1:.6f} {y2 - y1:.6f}')
+    return kept
+
+
+def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_prefix=None, ignore_areas=None,
+                  extra_labels=None):
     """Teacher-label every image under a local (own-camera) source directory.
 
     These frames carry no labels of their own (collect_frames.py's `select`
@@ -390,6 +417,9 @@ def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_p
     annotations for - labelled_classes is passed empty. Unlike a Roboflow
     Universe source, there is no --max-images subsampling: there typically
     aren't many own-camera frames to begin with.
+
+    extra_labels ({file name: [[class, x1, y1, x2, y2], ...]}, normalised)
+    adds hand-checked boxes for classes the teacher can't see (pushchairs).
     """
     from PIL import Image
     dirpath = Path(dirpath)
@@ -417,6 +447,8 @@ def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_p
             if teacher_boxes:
                 lines = tfc.augment_labels([], teacher_boxes, set(), width, height,
                                             person_class=person_idx, child_class=child_idx)
+        if extra_labels and img_path.name in extra_labels:
+            lines = merge_extra_labels(lines, extra_labels[img_path.name])
         for line in lines:
             cls = int(line.split()[0])
             counts[TARGET_CLASSES[cls]] += 1
@@ -480,6 +512,9 @@ def main():
     parser.add_argument('--ignore', action='append', default=[],
                          help="Repeatable, own-camera sources only: 'camera=x1,y1,x2,y2[:class,...]' (0-1 coords). "
                               "Teacher labels centred there are dropped (e.g. bins it calls cars).")
+    parser.add_argument('--extra-labels', default=None,
+                        help="JSON {file name: [[class, x1, y1, x2, y2], ...]} (normalised) of hand-checked "
+                             "boxes added to --local frames, for classes the teacher can't label (stroller)")
     parser.add_argument('--teacher-conf', type=float, default=0.5, help='teacher confidence threshold (default 0.5)')
     parser.add_argument('--target-project', default=None, help='default: the configured project')
     parser.add_argument('--workers', type=int, default=4, help='concurrent uploads (default 4)')
@@ -557,12 +592,13 @@ def main():
         ignore_areas = static_filter.parse_ignore(args.ignore)
     except ValueError as err:
         sys.exit(str(err))
+    extra_labels = json.loads(Path(args.extra_labels).expanduser().read_text()) if args.extra_labels else None
     for raw_dir in args.locals:
         dirpath = Path(raw_dir).expanduser()
         prefix = f'local:{dirpath.name}'
         records, counts = prepare_local(dirpath, teacher, teacher_index_map,
                                          teacher_conf=args.teacher_conf, print_prefix=prefix,
-                                         ignore_areas=ignore_areas)
+                                         ignore_areas=ignore_areas, extra_labels=extra_labels)
         print(f'{prefix}: box counts {format_counts(counts)}', flush=True)
         for k, v in counts.items():
             totals[k] += v
