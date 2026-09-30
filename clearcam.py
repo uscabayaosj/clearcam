@@ -5,6 +5,7 @@ from detection.yolov9 import YOLOv9
 from detection import coreml_yolo
 from utils import assist_merge
 from utils import tiled_assist
+from utils.log_redaction import popen_redacted
 
 assist_model = None  # optional vehicle-assist Core ML detector; see make_assist_detector
 
@@ -743,7 +744,7 @@ class VideoCapture:
           "-threads", "1",
           "-"
       ]
-      return None, subprocess.Popen(command, stdout=subprocess.PIPE)
+      return None, popen_redacted(command, stdout=subprocess.PIPE)
 
     else:  # Live streams
       path = self._get_new_stream_dir(cam_name)
@@ -765,8 +766,8 @@ class VideoCapture:
           "-hls_segment_filename", str(path / f"stream_{uuid.uuid4().hex}_%06d.ts"),
           str(path / "stream.m3u8")
       ]
-      # Inherit stderr so camera connection failures reach the engine log.
-      hls_proc = subprocess.Popen(command, stdout=subprocess.DEVNULL)
+      # Camera connection failures reach the engine log, credentials masked.
+      hls_proc = popen_redacted(command, stdout=subprocess.DEVNULL)
       self.hls_proc[cam_name] = hls_proc
       if is_rtsp:
         # Detection decodes its own RTSP session instead of tailing the recorded
@@ -787,7 +788,7 @@ class VideoCapture:
             "-threads", "1",
             "-"
         ]
-        return hls_proc, subprocess.Popen(command, stdout=subprocess.PIPE)
+        return hls_proc, popen_redacted(command, stdout=subprocess.PIPE)
       time.sleep(15)
       if self.start_time[cam_name] is None: self.start_time[cam_name] = time.time()
 
