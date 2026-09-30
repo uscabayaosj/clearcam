@@ -17,7 +17,9 @@ class CaptureCommandTests(unittest.TestCase):
         namespace = {
             'uuid': uuid,
             'find_ffmpeg': lambda: '/test/ffmpeg',
-            'subprocess': SimpleNamespace(Popen=popen, DEVNULL=-3, PIPE=-1),
+            'subprocess': SimpleNamespace(Popen=Mock(side_effect=AssertionError('stderr must be redacted')), DEVNULL=-3, PIPE=-1),
+            # Both processes print the camera URL on failure: they must go through the redacting wrapper.
+            'popen_redacted': popen,
             'time': SimpleNamespace(sleep=Mock(), time=lambda: 100),
             'DETECT_FPS': 10.0,
         }
