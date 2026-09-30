@@ -107,6 +107,22 @@ def default_model_factory():
     return QwenProcess
 
 
+def usable_size(requested, available):
+    """The description model size to actually load.
+
+    A saved setting can name a model this build or Mac doesn't have (8B chosen
+    under an MLX build, then a build without MLX). Loading it would fail on
+    every single event; the smallest available model keeps descriptions going.
+    Returns (size, note) - note is None when the request is honoured."""
+    requested = int(requested)
+    available = sorted(int(s) for s in (available or []))
+    if not available or requested in available:
+        return requested, None
+    fallback = available[0]
+    return fallback, (f'The {requested}B description model is not available in this build; '
+                      f'using {fallback}B. Choose a model in Settings to change this.')
+
+
 def read_description(path):
     try:
         return json.loads(Path(path).with_suffix('.description.json').read_text()).get('description')

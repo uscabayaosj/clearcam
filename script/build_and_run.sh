@@ -9,6 +9,14 @@ if pgrep -x ClearCam >/dev/null; then
   if pgrep -x ClearCam >/dev/null; then echo "Quit ClearCam before rebuilding."; exit 1; fi
 fi
 cd "$TASK_ROOT"
+# The MLX describer (fast, and the only way to run the 8B model) is bundled
+# only when the build knows where mlx-vlm is installed. Default to the build
+# venv so a plain rebuild can't silently fall back to the tinygrad describer.
+DEFAULT_MLX_SITE="$HOME/.clearcam-mlx-venv/lib/python3.11/site-packages"
+if [ -z "${CLEARCAM_MLX_SITE:-}" ] && [ -d "$DEFAULT_MLX_SITE/mlx_vlm" ]; then
+  export CLEARCAM_MLX_SITE="$DEFAULT_MLX_SITE"
+fi
+[ -n "${CLEARCAM_MLX_SITE:-}" ] || echo "warning: no CLEARCAM_MLX_SITE; descriptions will use the slower tinygrad 2B model only" >&2
 swift build --package-path macos
 TASK_BINARY="$(swift build --package-path macos --show-bin-path)/ClearCam"
 .venv/bin/python script/package_macos.py --binary "$TASK_BINARY"

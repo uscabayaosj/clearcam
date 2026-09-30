@@ -1,4 +1,4 @@
-import os, sqlite3, contextlib, pickle
+import os, sqlite3, contextlib, pickle, threading
 from typing import Any
 #from tinygrad.helpers import diskcache_get
 
@@ -8,6 +8,11 @@ cache_dir: str = str(DATA_DIR)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHEDB = os.path.abspath(os.path.join(cache_dir, "cc_cache.db"))
 _db_connection = None
+# One connection is shared by HTTP handler threads, camera loops and counters.
+# Python's sqlite3 requires callers to serialise use of a shared connection;
+# without it, rare overlaps corrupted a statement ("returned NULL without
+# setting an exception"). Every operation below holds this lock.
+_db_lock = threading.RLock()
 VERSION = 1
 def db_connection():
   global _db_connection
@@ -18,6 +23,15 @@ def db_connection():
       _db_connection.execute("PRAGMA busy_timeout = 60000;")
   return _db_connection
 
+def _locked(fn):
+  import functools
+  @functools.wraps(fn)
+  def wrapper(*args, **kwargs):
+    with _db_lock:
+      return fn(*args, **kwargs)
+  return wrapper
+
+@_locked
 def diskcache_put(table: str, key: dict|str|int, val: Any,  id: int|str|None = None, prepickled=False, replace=True):
   if isinstance(key, (str, int)): key = {"key": key}  
   conn = db_connection()
@@ -51,6 +65,7 @@ def diskcache_put(table: str, key: dict|str|int, val: Any,  id: int|str|None = N
   cur.close()
   return val, id
 
+@_locked
 def diskcache_delete(table: str, key: dict|str|int, id: int|str|None = None):
   if isinstance(key, (str, int)): key = {"key": key}
   conn = db_connection()
@@ -69,6 +84,7 @@ def diskcache_delete(table: str, key: dict|str|int, id: int|str|None = None):
   finally:
     cur.close()
 
+@_locked
 def diskcache_get(table: str, key: str|None, id: str|None = None) -> Any:
   cur = db_connection().cursor()
   try:

@@ -87,7 +87,7 @@ from utils.stream_health import StreamHealth
 from utils import count_zones as count_zones_mod
 from utils import layout_io
 from utils import macos_notifications
-from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop
+from utils.local_descriptions import LocalDescriptions, read_description, trigger_prompt, write_trigger_crop, trigger_crop, usable_size
 from utils.event_dedupe import RecentTriggers
 from utils.live_journal import LiveJournal
 import multiprocessing
@@ -2787,6 +2787,13 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     request_queue_size = 128
     daemon_threads = True
 
+    def handle_error(self, request, client_address):
+      # The page closing a request early (panel resized, tab hidden) is
+      # normal; only real errors deserve a traceback in the log.
+      if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+        return
+      super().handle_error(request, client_address)
+
     def __init__(self, server_address, RequestHandlerClass):
       ThreadingMixIn.__init__(self)
       HTTPServer.__init__(self, server_address, RequestHandlerClass)
@@ -2912,7 +2919,10 @@ if __name__ == "__main__":
   if global_settings.use_clip: object_finder.init_clip()
   if global_settings.use_face: object_finder.init_face()
 
-  local_descriptions.configure(global_settings.use_qwen, global_settings.qwen_size)
+  # A saved size this build can't load would fail on every event; use one it can.
+  qwen_size, qwen_note = usable_size(global_settings.qwen_size, describer_sizes())
+  if qwen_note: print(qwen_note)
+  local_descriptions.configure(global_settings.use_qwen, qwen_size)
   # There is nothing saved-to-disk to recover in live-only mode: events live
   # only in live_journal, and descriptions for them go through submit_memory.
   if cam.record_video:
