@@ -1,0 +1,16 @@
+{
+  "source": "local",
+  "path": "models/pushchair-assist.mlpackage (bundled; trained as clearcam-home v7, YOLOv11 Small on half-frame crops)",
+  "version": 7,
+  "names": [
+    "bicycle",
+    "car",
+    "child",
+    "dog",
+    "person",
+    "scooter",
+    "stroller",
+    "truck"
+  ],
+  "installed_at": "2026-10-01T17:58:50.728261"
+}
