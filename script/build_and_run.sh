@@ -16,6 +16,11 @@ DEFAULT_MLX_SITE="$HOME/.clearcam-mlx-venv/lib/python3.11/site-packages"
 if [ -z "${CLEARCAM_MLX_SITE:-}" ] && [ -d "$DEFAULT_MLX_SITE/mlx_vlm" ]; then
   export CLEARCAM_MLX_SITE="$DEFAULT_MLX_SITE"
 fi
+# The bundled 2B describer is copied from the HF cache, which cache cleaners
+# wipe; a copy kept outside ~/.cache survives that.
+if [ -z "${CLEARCAM_MLX_MODELS:-}" ] && [ -f "$HOME/.clearcam-mlx-models/Qwen3-VL-2B-Instruct-4bit/config.json" ]; then
+  export CLEARCAM_MLX_MODELS="$HOME/.clearcam-mlx-models"
+fi
 [ -n "${CLEARCAM_MLX_SITE:-}" ] || echo "warning: no CLEARCAM_MLX_SITE; descriptions will use the slower tinygrad 2B model only" >&2
 swift build --package-path macos
 TASK_BINARY="$(swift build --package-path macos --show-bin-path)/ClearCam"
