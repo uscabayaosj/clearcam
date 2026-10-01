@@ -56,5 +56,23 @@ class StreamHealthTest(unittest.TestCase):
     self.assertEqual(h.status(later)["state"], "ok")
 
 
+
+class RepeatedPictureTest(unittest.TestCase):
+  def test_identical_picture_is_not_new(self):
+    from utils.stream_health import RepeatedPicture
+    r = RepeatedPicture()
+    frame = bytes(range(256)) * 1000
+    self.assertTrue(r.is_new(frame))
+    self.assertFalse(r.is_new(bytes(frame)))
+
+  def test_a_small_change_is_new(self):
+    from utils.stream_health import RepeatedPicture
+    r = RepeatedPicture(stride=1)
+    frame = bytearray(256 * 1000)
+    self.assertTrue(r.is_new(bytes(frame)))
+    frame[5000] = 1                       # e.g. the camera's clock ticking
+    self.assertTrue(r.is_new(bytes(frame)))
+
+
 if __name__ == "__main__":
   unittest.main()

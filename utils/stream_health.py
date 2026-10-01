@@ -40,3 +40,26 @@ class StreamHealth:
         else:
             state = 'ok'
         return {"state": state, "frame_age": None if age is None else round(age, 1), "drops_10m": recent}
+
+
+class RepeatedPicture:
+    """Spot a decoder repeating one picture.
+
+    ffmpeg's rawvideo output pads to a constant frame rate, so when a camera's
+    stream freezes it keeps emitting the last picture forever: frames arrive,
+    nothing changes, and every "no new frame" watchdog is fooled (tapo360 sat on
+    one picture for 2 h 40 min). A camera's on-screen clock changes every
+    second, so a repeated picture is never a real new frame.
+    """
+
+    def __init__(self, stride=97):
+        self.stride = stride
+        self.last = None
+
+    def is_new(self, raw_bytes):
+        import zlib
+        signature = zlib.crc32(bytes(raw_bytes[::self.stride]))
+        if signature == self.last:
+            return False
+        self.last = signature
+        return True

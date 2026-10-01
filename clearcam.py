@@ -84,7 +84,7 @@ from utils import summaries
 from utils import corrections
 from utils import ignore_areas as ignore_areas_mod
 from utils import view_guard as view_guard_mod
-from utils.stream_health import StreamHealth
+from utils.stream_health import StreamHealth, RepeatedPicture
 from utils import count_zones as count_zones_mod
 from utils import layout_io
 from utils import macos_notifications
@@ -550,6 +550,8 @@ class VideoCapture:
     self.pipeline[cam_name] = {"last_frame": None, "last_inference": None, "last_event": None, "state": "connecting", "error": None}
     if not hasattr(self, 'stream_health'): self.stream_health = {}
     self.stream_health[cam_name] = StreamHealth()
+    if not hasattr(self, 'repeated_picture'): self.repeated_picture = {}
+    self.repeated_picture[cam_name] = RepeatedPicture()
     self.counter[cam_name] = RollingClassCounter(cam_name=cam_name, window_seconds=float('inf'))
     self.src[cam_name] = src # todo
     self.last_frames[cam_name] = deque(maxlen=2)
@@ -892,6 +894,11 @@ class VideoCapture:
           continue  # Never reshape a partial/empty read into an image.
         else:
           fail_count = 0
+        if not self.repeated_picture[cam_name].is_new(raw_bytes):
+          # The decoder repeats the last picture when a camera's stream freezes:
+          # not a new frame, so the stall watchdog and connection badge see it.
+          time.sleep(1 / 100)
+          continue
         self.raw_frame[cam_name] = np.frombuffer(raw_bytes, np.uint8).reshape((self.height[cam_name], self.width[cam_name], 3))
         self.frame_num[cam_name] += 1
         self.pipeline[cam_name]["last_frame"] = time.time()
