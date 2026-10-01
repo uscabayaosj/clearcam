@@ -8,6 +8,7 @@ from utils import tiled_assist
 from utils.log_redaction import popen_redacted
 
 assist_model = None  # optional vehicle-assist Core ML detector; see make_assist_detector
+pushchair_model = None  # optional pushchair-only detector run on half-frame squares
 
 
 def make_detector(model_size, model_res):
@@ -23,6 +24,25 @@ def make_detector(model_size, model_res):
         print('Core ML unavailable, using tinygrad YOLO:', error)
   print('Detection: tinygrad YOLO', model_size)
   return YOLOv9(model_size, model_res)
+
+
+def make_pushchair_detector():
+  """Optional pushchair-only Core ML detector (Data/models/pushchair-assist.mlpackage),
+  trained on half-frame squares. When present it owns pushchairs; the vehicle
+  assist keeps cars and trucks."""
+  if os.environ.get('CLEARCAM_NO_COREML') == '1':
+    return None
+  package = coreml_yolo.resolve_assist_package([os.environ.get('CLEARCAM_MODEL_DIR'), 'models', str(BASE_DIR / 'models')],
+                                               name=coreml_yolo.PUSHCHAIR_MODEL_FILE)
+  if package is None:
+    return None
+  try:
+    detector = coreml_yolo.CoreMLYolo(package)
+    print('Detection: pushchair assist', package)
+    return detector
+  except Exception as error:
+    print('Pushchair assist model unavailable:', error)
+    return None
 
 
 def make_assist_detector():
@@ -1203,7 +1223,7 @@ class VideoCapture:
         # exactly as the primary detector saw it.
         # Pushchairs are also searched for in two half-frame squares, where
         # they're big enough for the assist model to see (utils/tiled_assist).
-        preds = assist_merge.merge_assist(preds, tiled_assist.assist_predict(assist_model, frame))
+        preds = assist_merge.merge_assist(preds, tiled_assist.assist_predict(assist_model, frame, pushchair_detector=pushchair_model))
     else:
       frame = Tensor(frame)
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
@@ -2920,6 +2940,7 @@ if __name__ == "__main__":
   model = make_detector(global_settings.model_size, int(global_settings.model_res))
   apply_model_class_names(model, class_labels, color_dict)
   assist_model = make_assist_detector()
+  pushchair_model = make_pushchair_detector() if assist_model is not None else None
   object_finder = ObjectFinder()
   cam = VideoCapture()
   cam.record_video = getattr(global_settings, 'record_video', False)

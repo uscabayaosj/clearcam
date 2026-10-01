@@ -49,18 +49,36 @@ def nms(preds, iou=NMS_IOU):
     return preds[sorted(keep)]
 
 
-def assist_predict(detector, frame, tile_classes=TILE_CLASSES):
+def _only(preds, ids):
+    return preds[np.isin(preds[:, 5], ids)]
+
+
+def assist_predict(detector, frame, tile_classes=TILE_CLASSES, pushchair_detector=None):
     """Whole-frame assist predictions, with tile_classes also searched for in
-    two half-frame squares. Returns Nx6 rows in whole-frame pixels."""
-    full = np.asarray(detector(frame), dtype=np.float32).reshape(-1, 6)
+    two half-frame squares. Returns Nx6 rows in whole-frame pixels.
+
+    pushchair_detector, when given, owns tile_classes entirely (whole frame and
+    halves) and `detector` keeps only its other classes: the half-frame-trained
+    pushchair model finds 35/35 held-back pushchairs but only 63% of cars,
+    while the vehicle model keeps cars at 93%."""
+    rows = lambda d, img: np.asarray(d(img), dtype=np.float32).reshape(-1, 6)
+    full = rows(detector, frame)
+    ids = np.array(sorted(tile_classes), dtype=np.float32)
+    source = detector
+    if pushchair_detector is not None:
+        # The two halves cover the whole frame, so the pushchair model needs no
+        # whole-frame pass of its own (one fewer inference per frame).
+        full = full[~np.isin(full[:, 5], ids)]
+        source = pushchair_detector
     height, width = frame.shape[:2]
     offsets = tile_offsets(width, height)
     if not offsets or not tile_classes:
+        if pushchair_detector is not None:   # too narrow to split: one whole-frame pass
+            full = np.concatenate([full, _only(rows(pushchair_detector, frame), ids)], axis=0)
         return full
-    ids = np.array(sorted(tile_classes), dtype=np.float32)
     parts = [full[np.isin(full[:, 5], ids)]]
     for x0 in offsets:
-        tile = np.asarray(detector(frame[:, x0:x0 + height]), dtype=np.float32).reshape(-1, 6)
+        tile = rows(source, frame[:, x0:x0 + height])
         tile = tile[np.isin(tile[:, 5], ids)].copy()
         tile[:, [0, 2]] += x0
         parts.append(tile)

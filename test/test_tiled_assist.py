@@ -61,6 +61,28 @@ class AssistPredictTest(unittest.TestCase):
     self.assertEqual((len(calls), out.tolist()), (1, [[1, 1, 5, 5, 0.75, STROLLER]]))
 
 
+class SplitDetectorsTest(unittest.TestCase):
+  def test_vehicles_from_one_model_pushchairs_from_the_other(self):
+    vehicles = lambda f: np.array([[100, 100, 300, 200, 0.75, CAR], [50, 50, 60, 60, 0.75, STROLLER]], np.float32)
+    calls = []
+    def prams(f):
+      calls.append(f.shape[1])
+      return np.array([[10, 300, 40, 360, 0.5, STROLLER], [0, 0, 50, 50, 0.75, CAR]], np.float32) if f.shape[1] == 720 else np.zeros((0, 6), np.float32)
+    out = ta.assist_predict(vehicles, frame(), pushchair_detector=prams)
+    self.assertEqual(out[out[:, 5] == CAR].tolist(), [[100, 100, 300, 200, 0.75, CAR]])   # only the vehicle model's car
+    strollers = sorted(out[out[:, 5] == STROLLER].tolist())
+    self.assertEqual(strollers, [[10, 300, 40, 360, 0.5, STROLLER], [570, 300, 600, 360, 0.5, STROLLER]])
+    self.assertEqual(sorted(calls), [720, 720])   # the two halves only: they cover the whole frame
+
+
+class NarrowFrameSplitDetectorsTest(unittest.TestCase):
+  def test_narrow_frame_still_searched_by_the_pushchair_model(self):
+    vehicles = lambda f: np.array([[1, 1, 5, 5, 0.75, STROLLER]], np.float32)
+    prams = lambda f: np.array([[2, 2, 6, 6, 0.5, STROLLER]], np.float32)
+    out = ta.assist_predict(vehicles, np.zeros((720, 800, 3), np.uint8), pushchair_detector=prams)
+    self.assertEqual(out.tolist(), [[2, 2, 6, 6, 0.5, STROLLER]])
+
+
 class NmsTest(unittest.TestCase):
   def test_different_classes_never_suppress_each_other(self):
     p = np.array([[0, 0, 10, 10, 0.75, CAR], [0, 0, 10, 10, 0.25, STROLLER]], np.float32)

@@ -19,6 +19,13 @@ class PackagePathsTests(unittest.TestCase):
             self.assertEqual(previous.name, 'vehicle-assist.previous.mlpackage')
             self.assertEqual(meta.name, 'vehicle-assist.json')
 
+    def test_pushchair_slot_has_its_own_fixed_name(self):
+        for size in ('t', 's', 'm'):
+            target, previous, meta = rm._package_paths('/data', size, pushchair=True)
+            self.assertEqual(target.name, 'pushchair-assist.mlpackage')
+            self.assertEqual(previous.name, 'pushchair-assist.previous.mlpackage')
+            self.assertEqual(meta.name, 'pushchair-assist.json')
+
     def test_non_assist_path_unchanged_by_size(self):
         target, previous, meta = rm._package_paths('/data', 's', assist=False)
         self.assertEqual(target.name, 'yolo11s-home.mlpackage')

@@ -95,6 +95,7 @@ def remap_class_ids(preds, lookup):
 
 
 ASSIST_MODEL_FILE = 'vehicle-assist.mlpackage'
+PUSHCHAIR_MODEL_FILE = 'pushchair-assist.mlpackage'  # optional; see utils/tiled_assist
 
 
 def resolve_assist_package(model_dirs, name=ASSIST_MODEL_FILE):

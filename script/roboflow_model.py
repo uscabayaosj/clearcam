@@ -54,11 +54,15 @@ def _models_dir(data_root):
 
 
 ASSIST_STEM = 'vehicle-assist'  # detection.coreml_yolo.resolve_assist_package looks for this name
+PUSHCHAIR_STEM = 'pushchair-assist'  # ...and detection.coreml_yolo.PUSHCHAIR_MODEL_FILE for this one
 
 
-def _package_paths(data_root, size, assist=False):
+def _package_paths(data_root, size, assist=False, pushchair=False):
     models_dir = _models_dir(data_root)
-    if assist:
+    if pushchair:
+        # Pushchair-only model run on half-frame squares (utils/tiled_assist).
+        stem = PUSHCHAIR_STEM
+    elif assist:
         # Fixed name (independent of --size): detection.coreml_yolo.resolve_assist_package.
         stem = ASSIST_STEM
     else:
@@ -87,8 +91,8 @@ def _read_package_names(path):
     return None
 
 
-def rollback(data_root, size, assist=False):
-    target, previous, meta = _package_paths(data_root, size, assist)
+def rollback(data_root, size, assist=False, pushchair=False):
+    target, previous, meta = _package_paths(data_root, size, assist, pushchair)
     if previous.exists():
         if target.exists():
             shutil.rmtree(target)
@@ -131,6 +135,9 @@ def main():
                          help="install into Data/models/vehicle-assist.mlpackage (the vehicle "
                               "assist detector slot) instead of the size-based -home slot; "
                               "--size is ignored in this mode")
+    parser.add_argument('--pushchair', action='store_true',
+                         help="install into Data/models/pushchair-assist.mlpackage: a model used only "
+                              "for pushchairs, searched for in two half-frame squares; --size is ignored")
     parser.add_argument('--from-local', default=None, metavar='PATH',
                          help='install an already-converted .mlpackage directly (e.g. a previous '
                               'export'"'"'s weights.mlpackage), skipping download and re-conversion')
@@ -138,10 +145,10 @@ def main():
 
     data_root = Path(args.data).expanduser()
     if args.rollback:
-        rollback(data_root, args.size, args.assist)
+        rollback(data_root, args.size, args.assist, args.pushchair)
         return
 
-    target, previous, meta = _package_paths(data_root, args.size, args.assist)
+    target, previous, meta = _package_paths(data_root, args.size, args.assist, args.pushchair)
 
     if args.from_local:
         source = Path(args.from_local).expanduser()
@@ -162,7 +169,7 @@ def main():
             names=model_names, installed_at=datetime.datetime.now().isoformat(),
         ), indent=2))
         print(f'installed {target}')
-        rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --assist' if args.assist else '')
+        rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --pushchair' if args.pushchair else ' --assist' if args.assist else '')
         print(f'Installed. Quit and reopen ClearCam to use it. To roll back: {rollback_cmd}')
         return
 
@@ -215,7 +222,7 @@ def main():
     ), indent=2))
 
     print(f'installed {target}')
-    rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --assist' if args.assist else '')
+    rollback_cmd = 'bash script/roboflow_model.sh --rollback' + (' --pushchair' if args.pushchair else ' --assist' if args.assist else '')
     print(f'Installed. Quit and reopen ClearCam to use it. To roll back: {rollback_cmd}')
 
 
