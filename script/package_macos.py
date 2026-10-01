@@ -289,6 +289,11 @@ def main():
     for url in bundle_urls:
         key = hashlib.md5(url.encode()).hexdigest()
         cached = _ensure_downloads_dir() / key
+        if not cached.is_file():
+            # tinygrad's cache lives in ~/Library/Caches, which cleaners empty;
+            # ~/.clearcam-build-models keeps a copy that survives that.
+            kept = Path(os.environ.get('CLEARCAM_BUILD_MODELS', Path.home() / '.clearcam-build-models')) / key
+            if kept.is_file(): cached = kept
         if not cached.is_file(): raise RuntimeError(f'Required model must be prefetched on the build machine: {url}')
         shutil.copy2(cached, models / key)
         with cached.open('rb') as stream: checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
