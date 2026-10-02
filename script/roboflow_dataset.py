@@ -447,13 +447,17 @@ def prepare_local(dirpath, teacher, teacher_index_map, teacher_conf=0.5, print_p
             if teacher_boxes:
                 lines = tfc.augment_labels([], teacher_boxes, set(), width, height,
                                             person_class=person_idx, child_class=child_idx)
+        checked = set()
         if extra_labels and img_path.name in extra_labels:
+            before = set(lines)
             lines = merge_extra_labels(lines, extra_labels[img_path.name])
+            checked = set(lines) - before
         for line in lines:
             cls = int(line.split()[0])
             counts[TARGET_CLASSES[cls]] += 1
         records.append(dict(path=img_path, lines=lines, split=split, orig_name=img_path.name,
-                             width=width, height=height, final_name=img_path.name, batch=batch))
+                             width=width, height=height, final_name=img_path.name, batch=batch,
+                             checked=checked))
         if (n + 1) % 500 == 0:
             print(f'{print_prefix}: prepared {n + 1}/{len(pairs)}', flush=True)
     records, counts, dropped = drop_static_labels(records, ignore_areas)
@@ -479,6 +483,12 @@ def drop_static_labels(records, ignore_areas=None):
         for j, (name, b) in enumerate(boxes):
             if static_filter.ignored(camera, name, b, ignore_areas or {}):
                 mask[j] = False
+    # Boxes checked by eye are never scenery: a pushchair that pauses sits at
+    # one spot across frames, and dropping it would teach "not a pushchair".
+    for rec, mask in zip(records, masks):
+        for j, line in enumerate(rec['lines']):
+            if line in rec.get('checked', ()):
+                mask[j] = True
     counts = {name: 0 for name in TARGET_CLASSES}
     dropped = 0
     for rec, mask in zip(records, masks):

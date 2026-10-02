@@ -459,6 +459,18 @@ class ExtraLabelsTests(unittest.TestCase):
             self.assertEqual(classes('own-cam-20260930-110000.jpg'), ['bicycle', 'person'])   # untouched
             self.assertEqual(counts['stroller'], 1)
 
+    def test_hand_checked_boxes_survive_the_scenery_filter(self):
+        # A pushchair that pauses sits at one spot across frames, which the
+        # scenery filter would drop; a box checked by eye must never be dropped.
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp) / 'selected'
+            names = [f'own-cam-20260930-1000{s:02d}.jpg' for s in range(6)]
+            for n in names: _make_image(dirpath / 'train' / 'images' / n)
+            extra = {n: [['stroller', 0.1, 0.1, 0.3, 0.4]] for n in names}
+            records, counts = rd.prepare_local(dirpath, teacher=object(), teacher_index_map={},
+                                               extra_labels=extra)
+            self.assertEqual(counts['stroller'], 6)
+
     def test_unknown_class_in_extra_labels_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             dirpath = Path(tmp) / 'selected'
