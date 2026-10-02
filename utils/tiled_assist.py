@@ -12,6 +12,7 @@ cut in two by a tile edge can't be counted twice.
 import numpy as np
 
 STROLLER_ID = 80                 # canonical id (COCO order + extras), see assist_merge
+PERSON_IDS = (0, 81)             # person, child (canonical ids): someone who could be pushing a pushchair
 TILE_CLASSES = frozenset({STROLLER_ID})
 MIN_ASPECT = 1.2                 # narrower frames already give objects enough pixels
 NMS_IOU = 0.5
@@ -53,14 +54,18 @@ def _only(preds, ids):
     return preds[np.isin(preds[:, 5], ids)]
 
 
-def assist_predict(detector, frame, tile_classes=TILE_CLASSES, pushchair_detector=None):
+def assist_predict(detector, frame, tile_classes=TILE_CLASSES, pushchair_detector=None, person_present=True):
     """Whole-frame assist predictions, with tile_classes also searched for in
     two half-frame squares. Returns Nx6 rows in whole-frame pixels.
 
     pushchair_detector, when given, owns tile_classes entirely (whole frame and
     halves) and `detector` keeps only its other classes: the half-frame-trained
     pushchair model finds 35/35 held-back pushchairs but only 63% of cars,
-    while the vehicle model keeps cars at 93%."""
+    while the vehicle model keeps cars at 93%.
+
+    person_present=False skips the half-frame passes: a pushchair always has
+    someone pushing it, and the two extra passes per frame on every camera
+    cut detection from ~6.8 to ~4-5 fps."""
     rows = lambda d, img: np.asarray(d(img), dtype=np.float32).reshape(-1, 6)
     full = rows(detector, frame)
     ids = np.array(sorted(tile_classes), dtype=np.float32)
@@ -70,6 +75,8 @@ def assist_predict(detector, frame, tile_classes=TILE_CLASSES, pushchair_detecto
         # whole-frame pass of its own (one fewer inference per frame).
         full = full[~np.isin(full[:, 5], ids)]
         source = pushchair_detector
+    if not person_present:
+        return full
     height, width = frame.shape[:2]
     offsets = tile_offsets(width, height)
     if not offsets or not tile_classes:

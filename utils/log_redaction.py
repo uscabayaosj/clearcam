@@ -9,12 +9,20 @@ import subprocess
 import sys
 import threading
 
-_CREDENTIALS = re.compile(r'(\b[a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/@]*@')
+_URL = re.compile(r'(\b[a-zA-Z][a-zA-Z0-9+.-]*://)(\S+)')
+
+
+def _mask(match):
+    scheme, rest = match.group(1), match.group(2)
+    # Passwords are typed in raw and can contain '/' or '@', so the login is
+    # everything up to the LAST '@' in the URL (over-masking a rare '@' in a
+    # path is fine; leaking a password is not).
+    return scheme + '***@' + rest.rsplit('@', 1)[1] if '@' in rest else match.group(0)
 
 
 def redact(text):
     """rtsp://user:pass@host -> rtsp://***@host (any scheme, any number of URLs)."""
-    return _CREDENTIALS.sub(r'\1***@', text)
+    return _URL.sub(_mask, text)
 
 
 def _pump(stream, sink):

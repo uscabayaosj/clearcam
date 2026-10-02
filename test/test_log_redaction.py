@@ -14,6 +14,10 @@ class RedactTest(unittest.TestCase):
     for line in ('[h264 @ 0x7c45] error while decoding MB 6 3', 'rtsp://192.168.1.2:554/live/ch0 failed'):
       self.assertEqual(redact(line), line)
 
+  def test_passwords_with_slashes_or_at_signs_are_masked(self):
+    self.assertEqual(redact('open rtsp://user:pa/ss@10.0.0.2/stream1 failed'), 'open rtsp://***@10.0.0.2/stream1 failed')
+    self.assertEqual(redact('rtsp://user:p@ss@10.0.0.2:554/live'), 'rtsp://***@10.0.0.2:554/live')
+
   def test_every_url_on_a_line_is_masked(self):
     self.assertEqual(redact('a rtsp://u:p@h1/x b http://u2:p2@h2/y'), 'a rtsp://***@h1/x b http://***@h2/y')
 

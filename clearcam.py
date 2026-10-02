@@ -32,7 +32,8 @@ def make_pushchair_detector():
   assist keeps cars and trucks."""
   if os.environ.get('CLEARCAM_NO_COREML') == '1':
     return None
-  package = coreml_yolo.resolve_assist_package([os.environ.get('CLEARCAM_MODEL_DIR'), 'models', str(BASE_DIR / 'models')],
+  # Data/models first: a model installed with roboflow_model.sh must win over the copy bundled in the app.
+  package = coreml_yolo.resolve_assist_package([str(BASE_DIR / 'models'), os.environ.get('CLEARCAM_MODEL_DIR'), 'models'],
                                                name=coreml_yolo.PUSHCHAIR_MODEL_FILE)
   if package is None:
     return None
@@ -51,7 +52,8 @@ def make_assist_detector():
   detection behaves exactly as it did before this model existed."""
   if os.environ.get('CLEARCAM_NO_COREML') == '1':
     return None
-  package = coreml_yolo.resolve_assist_package([os.environ.get('CLEARCAM_MODEL_DIR'), 'models', str(BASE_DIR / 'models')])
+  # Data/models first: a model installed with roboflow_model.sh must win over the copy bundled in the app.
+  package = coreml_yolo.resolve_assist_package([str(BASE_DIR / 'models'), os.environ.get('CLEARCAM_MODEL_DIR'), 'models'])
   if package is None:
     return None
   try:
@@ -428,9 +430,6 @@ def view_reference_path(cam_name):
   return BASE_DIR / "count_zones" / f"{cam_name}.view.npy"
 
 
-guard_relearn_seen = {}
-
-
 def load_view_guard(cam_name):
   try: reference = np.load(view_reference_path(cam_name))
   except (OSError, ValueError): reference = None
@@ -445,10 +444,14 @@ def count_zones_state_path(now=None):
     return BASE_DIR / "count_zones" / f"{day}.json"
 
 
-def load_count_zones_file():
+def load_count_zones_file(now=None):
     """{cam_name: ZoneCounter.to_dict()-shaped payload} for today, or {} if
-    there is nothing saved yet (first run, or a fresh day)."""
-    path = count_zones_state_path()
+    there is nothing saved yet (first run, or a fresh day). On a fresh day,
+    yesterday's file stands in: its stats are ignored (load_dict checks the
+    date) but cars parked overnight keep their arrival times."""
+    now = now if now is not None else time.time()
+    path = count_zones_state_path(now)
+    if not path.is_file(): path = count_zones_state_path(now - 86400)
     if not path.is_file(): return {}
     try:
         data = json.loads(path.read_text())
@@ -1226,7 +1229,9 @@ class VideoCapture:
         # exactly as the primary detector saw it.
         # Pushchairs are also searched for in two half-frame squares, where
         # they're big enough for the assist model to see (utils/tiled_assist).
-        preds = assist_merge.merge_assist(preds, tiled_assist.assist_predict(assist_model, frame, pushchair_detector=pushchair_model))
+        person_present = bool(len(preds)) and bool(np.isin(np.asarray(preds)[:, 5].astype(int), tiled_assist.PERSON_IDS).any())
+        preds = assist_merge.merge_assist(preds, tiled_assist.assist_predict(
+          assist_model, frame, pushchair_detector=pushchair_model, person_present=person_present))
     else:
       frame = Tensor(frame)
       preds = jit_infer(model, frame, yolo_jit_cache).numpy()
@@ -1258,6 +1263,7 @@ class VideoCapture:
       self.view_checked[cam_name] = now_t
       guard = self.view_guard[cam_name]
       was_moved = guard.moved
+      relearned_before = getattr(guard, 'relearned', 0)
       had_reference = guard.reference is not None
       try:
         small = cv2.resize(cv2.cvtColor(np.asarray(frame), cv2.COLOR_BGR2GRAY), view_guard_mod.THUMB, interpolation=cv2.INTER_AREA)
@@ -1269,9 +1275,8 @@ class VideoCapture:
           view_reference_path(cam_name).parent.mkdir(parents=True, exist_ok=True)
           np.save(view_reference_path(cam_name), guard.reference)
         except OSError: pass
-      if was_moved and not guard.moved and getattr(guard, 'relearned', 0) and now_t - guard_relearn_seen.get(cam_name, 0) > 1:
+      if getattr(guard, 'relearned', 0) > relearned_before:
         print(f"{cam_name}: view held steady for {int(view_guard_mod.RELEARN_AFTER)}s after a change; adopted it and resumed counting")
-        guard_relearn_seen[cam_name] = now_t
         try: np.save(view_reference_path(cam_name), guard.reference)
         except OSError: pass
       if was_moved and not guard.moved:

@@ -24,6 +24,7 @@ def make_counter(*args, **kwargs):
     # Existing tests start counting and feed objects at the same instant;
     # the startup grace (objects already present aren't new entries) has its own tests.
     kwargs.setdefault('startup_grace', 0.0)
+    kwargs.setdefault('min_park', 0.0)   # short test stays; the parking minimum has its own tests
     return count_zones.ZoneCounter(*args, **kwargs)
 
 
@@ -418,7 +419,7 @@ class StartupAndResumeTests(unittest.TestCase):
         return zone(classes=('car',), metric='dwell')
 
     def test_object_present_at_startup_is_timed_not_counted(self):
-        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0)
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, min_park=0.0)
         for t in (1.0, 2.0, 30.0):
             c.update(t, [(1, 'car', box_at(0.5, 0.5))])
         snap = c.snapshot(30.0)[0]
@@ -427,14 +428,14 @@ class StartupAndResumeTests(unittest.TestCase):
         self.assertTrue(snap['inside_now'][0]['adopted'])
 
     def test_arrival_after_grace_counts(self):
-        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0)
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, min_park=0.0)
         c.update(1.0, [])                                   # counting starts, zone empty
         c.update(100.0, [(1, 'car', box_at(0.5, 0.5))])
         c.update(101.0, [(1, 'car', box_at(0.5, 0.5))])
         self.assertEqual(c.snapshot(101.0)[0]['stats']['car']['entered'], 1)
 
     def test_lost_and_refound_at_same_spot_is_one_stay(self):
-        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0, min_park=0.0)
         c.update(10.0, [(1, 'car', box_at(0.5, 0.5))]); c.update(11.0, [(1, 'car', box_at(0.5, 0.5))])
         c.update(100.0, [])                         # track lost (> dwell lost timeout)
         self.assertEqual(len(c.snapshot(100.0)[0]['inside_now']), 1)   # still shown as parked
@@ -444,7 +445,7 @@ class StartupAndResumeTests(unittest.TestCase):
         self.assertEqual(snap['inside_now'][0]['since'], 10.0)
 
     def test_lost_stay_not_resumed_is_recorded_when_window_expires(self):
-        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0, min_park=0.0)
         c.update(10.0, [(1, 'car', box_at(0.5, 0.5))]); c.update(70.0, [(1, 'car', box_at(0.5, 0.5))])
         c.update(100.0, [])
         c.update(100.0 + count_zones.RESUME_WINDOW + 80, [])
@@ -454,7 +455,7 @@ class StartupAndResumeTests(unittest.TestCase):
         self.assertEqual(s['inside_now'], [])
 
     def test_different_spot_is_a_new_car(self):
-        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0, min_park=0.0)
         c.update(10.0, [(1, 'car', box_at(0.4, 0.5))]); c.update(11.0, [(1, 'car', box_at(0.4, 0.5))])
         c.update(100.0, [])
         c.update(300.0, [(2, 'car', box_at(0.6, 0.5))]); c.update(301.0, [(2, 'car', box_at(0.6, 0.5))])
@@ -543,3 +544,102 @@ class RiderSpeedTests(unittest.TestCase):
 
     def test_walker_counts(self):
         self.assertEqual(self.run_track(0.08), 1)     # 0.8 heights/s: walking
+
+
+class ParkingStayTests(unittest.TestCase):
+    """tapo360's parking zones: a car must stay a minute to count as parked,
+    and a restart must not lose a parked car's real arrival time."""
+    def dwell_zone(self):
+        return zone(id='bays', classes=('car',), metric='dwell')
+
+    def park(self, c, track, t0, t1, at=(0.5, 0.5), step=5.0):
+        t = t0
+        while t <= t1:
+            c.update(t, [(track, 'car', box_at(*at))]); t += step
+
+    def leave(self, c, track, t):
+        c.update(t, [(track, 'car', box_at(0.05, 0.05))])
+        c.update(t + count_zones.DWELL_EXIT_HYSTERESIS + 1, [(track, 'car', box_at(0.05, 0.05))])
+
+    def test_car_driving_through_is_not_a_parking_stay(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        self.park(c, 1, 10.0, 14.0, step=1.0)          # 4 s across the bays
+        self.leave(c, 1, 15.0)
+        stats = c.snapshot(100.0)[0]['stats']['car']
+        self.assertEqual((stats['entered'], stats['exited'], stats['dwell_count']), (0, 0, 0))
+
+    def test_car_that_stays_counts_once_with_its_full_stay(self):
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=0.0, startup_grace=0.0)
+        self.park(c, 1, 10.0, 30.0)
+        self.assertEqual(c.snapshot(30.0)[0]['stats']['car']['entered'], 0)    # not yet a minute
+        self.park(c, 1, 35.0, 910.0)
+        self.assertEqual(c.snapshot(910.0)[0]['stats']['car']['entered'], 1)
+        self.leave(c, 1, 915.0)
+        stats = c.snapshot(1000.0)[0]['stats']['car']
+        self.assertEqual((stats['entered'], stats['exited'], stats['dwell_count']), (1, 1, 1))
+        self.assertAlmostEqual(stats['dwell_max'], 900.0, delta=5)
+
+    def test_restart_keeps_a_parked_cars_arrival_time(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'zones.json'
+            day = 1_700_000_000.0
+            c = count_zones.ZoneCounter([self.dwell_zone()], now=day, startup_grace=0.0)
+            self.park(c, 1, day + 10, day + 600)        # parked at day+10
+            c.save(path)
+            # ClearCam restarts: new counter, new tracker ids, zones arrive after load
+            r = count_zones.ZoneCounter(now=day + 700)
+            r.load(path)
+            r.reconfigure([self.dwell_zone()])
+            self.park(r, 7, day + 720, day + 3600)      # same spot, new track id, inside the grace period
+            snap = r.snapshot(day + 3600)[0]
+            self.assertEqual(len(snap['inside_now']), 1)
+            self.assertFalse(snap['inside_now'][0]['adopted'])
+            self.assertAlmostEqual(snap['inside_now'][0]['since'], day + 10, delta=1)
+            self.leave(r, 7, day + 3605)
+            stats = r.snapshot(day + 3700)[0]['stats']['car']
+            self.assertEqual(stats['entered'], 1)                                # not counted twice
+            self.assertAlmostEqual(stats['dwell_max'], 3590.0, delta=10)        # whole stay, across the restart
+
+    def test_restart_with_the_car_gone_does_not_invent_a_stay(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'zones.json'
+            day = 1_700_000_000.0
+            c = count_zones.ZoneCounter([self.dwell_zone()], now=day, startup_grace=0.0)
+            self.park(c, 1, day + 10, day + 600)
+            c.save(path)
+            r = count_zones.ZoneCounter(now=day + 700)
+            r.load(path)
+            r.reconfigure([self.dwell_zone()])
+            r.update(day + 720, [])
+            r.update(day + 720 + count_zones.RESUME_WINDOW + 10, [])         # never seen again
+            stats = r.snapshot(day + 720 + count_zones.RESUME_WINDOW + 10)[0]['stats']['car']
+            self.assertEqual((stats['entered'], stats['exited']), (1, 1))      # the stay before the restart
+            self.assertAlmostEqual(stats['dwell_max'], 590.0, delta=10)
+
+    def test_parked_cars_survive_a_restart_after_midnight(self):
+        import datetime
+        evening = datetime.datetime(2024, 3, 1, 23, 40, 0).timestamp()
+        after_midnight = datetime.datetime(2024, 3, 2, 0, 5, 0).timestamp()
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=evening, startup_grace=0.0)
+        self.park(c, 1, evening, evening + 19 * 60)          # seen until 23:59
+        saved = c.to_dict()                                  # last save went to yesterday's file
+        r = count_zones.ZoneCounter(now=after_midnight)
+        r.load_dict(saved)
+        r.reconfigure([self.dwell_zone()])
+        self.park(r, 9, after_midnight + 5, after_midnight + 300)
+        inside = r.snapshot(after_midnight + 300)[0]['inside_now']
+        self.assertEqual(len(inside), 1)
+        self.assertAlmostEqual(inside[0]['since'], evening, delta=1)
+        self.assertEqual(r.to_dict()['zones'].get('bays', {}).get('car', {}).get('entered', 0), 0)  # yesterday's stats not merged
+
+    def test_a_car_gone_after_restart_is_not_shown_as_parked(self):
+        day = 1_700_000_000.0
+        c = count_zones.ZoneCounter([self.dwell_zone()], now=day, startup_grace=0.0)
+        self.park(c, 1, day + 10, day + 600)
+        r = count_zones.ZoneCounter(now=day + 700)
+        r.load_dict(c.to_dict()); r.reconfigure([self.dwell_zone()])
+        r.update(day + 760, [])
+        self.assertEqual(r.snapshot(day + 760)[0]['inside_now'], [])
+

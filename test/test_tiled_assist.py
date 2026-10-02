@@ -83,6 +83,17 @@ class NarrowFrameSplitDetectorsTest(unittest.TestCase):
     self.assertEqual(out.tolist(), [[2, 2, 6, 6, 0.5, STROLLER]])
 
 
+class PersonGateTest(unittest.TestCase):
+  def test_no_person_in_view_skips_the_pushchair_halves(self):
+    calls = []
+    def prams(f):
+      calls.append(f.shape[1]); return np.zeros((0, 6), np.float32)
+    vehicles = lambda f: np.array([[100, 100, 300, 200, 0.75, CAR]], np.float32)
+    out = ta.assist_predict(vehicles, frame(), pushchair_detector=prams, person_present=False)
+    self.assertEqual(calls, [])
+    self.assertEqual(out.tolist(), [[100, 100, 300, 200, 0.75, CAR]])
+
+
 class NmsTest(unittest.TestCase):
   def test_different_classes_never_suppress_each_other(self):
     p = np.array([[0, 0, 10, 10, 0.75, CAR], [0, 0, 10, 10, 0.25, STROLLER]], np.float32)

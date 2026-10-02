@@ -31,6 +31,7 @@ STARTUP_GRACE = 30.0          # objects already inside when counting starts are 
 RESUME_WINDOW = 1800.0        # a "dwell" object lost and re-found at the same spot within this is the same stay
 PARKED_CLASSES = frozenset({"car", "truck"})   # only things that park get the lost-and-refound hold
 RESUME_DISTANCE = 0.04        # ...when its footpoint is within this (normalised) distance of where it was lost
+MIN_PARK_SECONDS = 60.0       # a car in a dwell zone must stay this long to count as parked (shorter = driving through)
 
 # A child is reported by the assist detector, not the primary one, but should
 # count as a person wherever a zone is watching for people.
@@ -187,7 +188,7 @@ class ZoneCounter:
     reset (see `_maybe_rollover`).
     """
 
-    def __init__(self, zones=None, now=None, startup_grace=STARTUP_GRACE):
+    def __init__(self, zones=None, now=None, startup_grace=STARTUP_GRACE, min_park=MIN_PARK_SECONDS):
         start = now if now is not None else time.time()
         # Tracker ids start fresh whenever the engine starts, so a car parked
         # before a restart would otherwise be counted as a second arrival.
@@ -195,6 +196,10 @@ class ZoneCounter:
         # streams connect and zone config arrives a while after the counter
         # is created, so a fixed start time would have expired already.
         self._startup_grace = startup_grace
+        self._min_park = min_park
+        # Parked stays saved before a restart, waiting for their zone config
+        # to arrive (see load_dict / reconfigure).
+        self._restored = []
         self._adopt_until = {}
         # (zone_id, class) -> [state of a dwell stay whose track was lost,
         # kept so the same object re-found at the same spot resumes it]
@@ -218,6 +223,11 @@ class ZoneCounter:
         for key in list(self._state.keys()):
             if key[0] not in self.zones:
                 del self._state[key]
+        # Parked cars saved before a restart go back into the lost-and-found,
+        # so the same car still at the same spot keeps its arrival time.
+        for state in [st for st in self._restored if st["zone_id"] in self.zones]:
+            self._restored.remove(state)
+            self._limbo.setdefault((state["zone_id"], state["class_name"]), []).append(state)
 
     def _maybe_rollover(self, now):
         today = _local_date(now)
@@ -314,10 +324,18 @@ class ZoneCounter:
                                 # arrival time and don't count it again.
                                 state["entry_time"] = resumed["entry_time"]
                                 state["adopted"] = resumed.get("adopted", False)
+                                state["counted"] = resumed.get("counted", True)
                             elif state["pending_enter_since"] < self._adopt_until[zone_id]:
                                 state["adopted"] = True   # was here before counting started
+                            elif self._is_parking(zone, eff_class):
+                                state["counted"] = False   # counted once it has stayed MIN_PARK
                             else:
+                                state["counted"] = True
                                 self._class_stats(zone_id, eff_class)["entered"] += 1
+                    if (state["confirmed"] and not state.get("adopted") and not state.get("counted", True)
+                            and now - state["entry_time"] >= self._min_park):
+                        state["counted"] = True
+                        self._class_stats(zone_id, eff_class)["entered"] += 1
                 else:
                     state["pending_enter_since"] = None
                     if state["confirmed"]:
@@ -347,6 +365,9 @@ class ZoneCounter:
                 else:
                     del self._state[key]
         self._expire_limbo(now)
+
+    def _is_parking(self, zone, class_name):
+        return self._min_park > 0 and zone["metric"] == "dwell" and class_name in PARKED_CLASSES
 
     def _resume(self, zone_id, zone, class_name, foot, now):
         """Pop and return a lost stay of this class whose last footpoint was
@@ -384,6 +405,8 @@ class ZoneCounter:
             # Arrived before counting started: its true stay is unknown, so it
             # neither counts as an entry nor skews the average.
             return
+        if not state.get("counted", True):
+            return   # left before MIN_PARK: drove through, never parked
         stats["exited"] += 1
         dwell = (state["last_inside_seen"] or state["entry_time"]) - state["entry_time"]
         stats["dwell_count"] += 1
@@ -438,8 +461,10 @@ class ZoneCounter:
             # anyone watching can tell (a parked car the detector blinked on).
             for (zid, cls), waiting in self._limbo.items():
                 if zid == zone_id:
+                    # ...but a car restored from before a restart isn't shown
+                    # until the camera actually sees it again: it may have left.
                     inside_now += [{"track_id": None, "class": cls, "since": st["entry_time"],
-                                    "adopted": bool(st.get("adopted"))} for st in waiting]
+                                    "adopted": bool(st.get("adopted"))} for st in waiting if not st.get("restored")]
             zones_out.append({
                 "id": zone_id, "name": zone["name"], "metric": zone["metric"],
                 "classes": list(zone["classes"]), "stats": by_class, "inside_now": inside_now,
@@ -447,18 +472,40 @@ class ZoneCounter:
         return zones_out
 
     def to_dict(self):
-        """Today's aggregates only (no inside_now, no live track state) --
-        what gets persisted to disk."""
+        """Today's aggregates, plus the parked cars (where and since when) so
+        a restart can carry their stays on -- what gets persisted to disk."""
+        parked = []
+        live = [(key[0], st) for key, st in self._state.items()]
+        held = [(zid, st) for (zid, _cls), waiting in self._limbo.items() for st in waiting]
+        for zone_id, st in live + held:
+            zone = self.zones.get(zone_id)
+            if (zone and zone["metric"] == "dwell" and st.get("confirmed") and st.get("last_foot")
+                    and st["class_name"] in PARKED_CLASSES):
+                parked.append({"zone_id": zone_id, "class_name": st["class_name"],
+                               "entry_time": st["entry_time"], "last_seen": st["last_seen"],
+                               "last_inside_seen": st.get("last_inside_seen"),
+                               "last_foot": list(st["last_foot"]), "adopted": bool(st.get("adopted")),
+                               "counted": bool(st.get("counted", True))})
         return {"date": self._day, "zones": {
             zone_id: {cls: dict(stats) for cls, stats in by_class.items()}
             for zone_id, by_class in self._stats.items()
-        }}
+        }, "parked": parked}
 
     def load_dict(self, data):
         """Merge a previously-saved to_dict() payload in, if it is for
         today; a stale (yesterday-or-older) file is simply ignored, same as
         never having been loaded."""
-        if not data or data.get("date") != self._day:
+        if not data:
+            return
+        # Parked cars carry over even from yesterday's file (a car parked
+        # overnight, ClearCam restarted after midnight); the stats don't.
+        for st in data.get("parked") or []:
+            restored = dict(st, confirmed=True, restored=True, last_foot=tuple(st["last_foot"]))
+            if restored["zone_id"] in self.zones:
+                self._limbo.setdefault((restored["zone_id"], restored["class_name"]), []).append(restored)
+            else:
+                self._restored.append(restored)
+        if data.get("date") != self._day:
             return
         for zone_id, by_class in (data.get("zones") or {}).items():
             for class_name, stats in by_class.items():
