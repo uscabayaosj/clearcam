@@ -18,6 +18,7 @@ HOLD_SECONDS = 3.0      # a verdict has to last this long before it flips
 FOLLOW = 0.02           # reference follows a steady scene this fast per sample
 JUMP_BELOW = 0.5        # consecutive samples this different = the camera turned (light changes are gradual)
 JUMP_MEMORY = 20.0      # a jump this recent can start a "moved" verdict
+RELEARN_AFTER = 300.0   # a "moved" view held this steady this long becomes the reference
 
 
 def edge_map(gray_small):
@@ -43,6 +44,8 @@ class ViewGuard:
         self._last_jump = None
         self.moved_since = None
         self.last_score = 1.0
+        self._steady_since = None
+        self.relearned = 0
 
     def reset(self):
         self.__init__()
@@ -51,9 +54,27 @@ class ViewGuard:
         """gray_small: THUMB-sized grayscale frame. Returns True while the view
         is considered moved away from the reference."""
         e = edge_map(gray_small)
-        if self._previous is not None and similarity(e, self._previous) < JUMP_BELOW:
+        step = similarity(e, self._previous) if self._previous is not None else None
+        if step is not None and step < JUMP_BELOW:
             self._last_jump = now
         self._previous = e
+        if self.moved:
+            # Held steady on a "moved" view: a false alarm (night vision off at
+            # dawn, a lorry parked in shot, a frozen stream catching up) or a
+            # camera that has settled. Either way, adopt it after RELEARN_AFTER
+            # rather than pausing counting for the rest of the day; a camera
+            # still sweeping never holds still that long.
+            if step is not None and step >= STEADY_ABOVE:
+                if self._steady_since is None:
+                    self._steady_since = now
+                elif now - self._steady_since >= RELEARN_AFTER:
+                    self.reference = e
+                    self.moved, self.moved_since = False, None
+                    self._pending_since = self._steady_since = None
+                    self.relearned += 1
+                    return False
+            else:
+                self._steady_since = None
         if self.reference is None:
             self.reference = e
             return False
@@ -72,6 +93,7 @@ class ViewGuard:
             elif now - self._pending_since >= HOLD_SECONDS:
                 self.moved = not self.moved
                 self.moved_since = now if self.moved else None
+                self._steady_since = None
                 self._pending_since = None
         else:
             self._pending_since = None

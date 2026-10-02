@@ -428,6 +428,9 @@ def view_reference_path(cam_name):
   return BASE_DIR / "count_zones" / f"{cam_name}.view.npy"
 
 
+guard_relearn_seen = {}
+
+
 def load_view_guard(cam_name):
   try: reference = np.load(view_reference_path(cam_name))
   except (OSError, ValueError): reference = None
@@ -1265,6 +1268,11 @@ class VideoCapture:
         try:
           view_reference_path(cam_name).parent.mkdir(parents=True, exist_ok=True)
           np.save(view_reference_path(cam_name), guard.reference)
+        except OSError: pass
+      if was_moved and not guard.moved and getattr(guard, 'relearned', 0) and now_t - guard_relearn_seen.get(cam_name, 0) > 1:
+        print(f"{cam_name}: view held steady for {int(view_guard_mod.RELEARN_AFTER)}s after a change; adopted it and resumed counting")
+        guard_relearn_seen[cam_name] = now_t
+        try: np.save(view_reference_path(cam_name), guard.reference)
         except OSError: pass
       if was_moved and not guard.moved:
         # Back on the zones' view: anything that showed up meanwhile is timed,

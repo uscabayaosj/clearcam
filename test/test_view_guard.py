@@ -36,3 +36,30 @@ class ViewGuardTests(unittest.TestCase):
         for k in range(5): g.check(float(k), home)
         g.check(5.0, scene(9)); g.check(6.0, scene(9))   # 2 s: a bird, a bus
         self.assertFalse(g.check(7.0, home))
+
+    def test_steady_new_view_is_adopted_after_a_while(self):
+        # A false alarm (night vision switching off, a lorry parking, a long
+        # freeze ending) must not pause counting for the rest of the day.
+        g = vg.ViewGuard()
+        home, changed = scene(1), scene(2)
+        t = 0.0
+        for _ in range(5): g.check(t, home); t += 1
+        for _ in range(10): g.check(t, changed); t += 1
+        self.assertTrue(g.moved)
+        tripped = g.moved_since
+        while t < tripped + vg.RELEARN_AFTER - 1:
+            self.assertTrue(g.check(t, changed)); t += 1   # paused for the whole wait
+        for _ in range(3): last = g.check(t, changed); t += 1
+        self.assertFalse(last)
+        self.assertEqual(g.relearned, 1)
+        self.assertFalse(g.check(t, changed))   # and it stays resumed
+
+    def test_a_camera_still_moving_is_not_adopted(self):
+        # A pan-tilt camera sweeping around never holds one view long enough.
+        g = vg.ViewGuard()
+        t = 0.0
+        for _ in range(5): g.check(t, scene(1)); t += 1
+        for k in range(int(vg.RELEARN_AFTER) + 60):
+            g.check(t, scene(100 + (k // 20))); t += 1   # a new view every 20 s
+        self.assertTrue(g.moved)
+
